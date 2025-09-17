@@ -93,7 +93,7 @@ bash scripts/linux/dev-down.sh
 启动应用：
 
 ```bash
-go run ./cmd/spike-api
+go run ./cmd/spike-server
 ```
 
 健康检查：

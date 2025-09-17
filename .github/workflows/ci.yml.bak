@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+          check-latest: true
+
+      - name: Cache Go Modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62
+          args: --timeout=5m
+
+      - name: Go mod download
+        run: |
+          if [ -f go.mod ]; then
+            go mod download
+          fi
+
+      - name: Lint
+        if: ${{ hashFiles('.golangci.yml') != '' }}
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62
+          args: run --timeout=5m
+
+      - name: Test
+        run: |
+          if [ -f go.mod ]; then
+            go test ./... -race -count=1 -coverprofile=coverage.out
+          else
+            echo "No go.mod found, skipping tests."
+          fi
+
+      - name: Build
+        run: |
+          if [ -f go.mod ]; then
+            go build ./...
+          else
+            echo "No go.mod found, skipping build."
+          fi
+
+

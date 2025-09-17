@@ -46,7 +46,7 @@ services:
 
 ```bash
 cp .env.example .env
-go run ./cmd/spike-api
+go run ./cmd/spike-server
 ```
 
 1. 健康检查：
@@ -118,7 +118,7 @@ curl -s http://localhost:8080/healthz | jq
 
 ```text
 .
-├─ cmd/spike-api              # 入口（main）
+├─ cmd/spike-server              # 入口（main）
 ├─ internal/
 │  ├─ api/                    # handler, router
 │  ├─ service/                # 业务逻辑
