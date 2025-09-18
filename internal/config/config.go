@@ -84,7 +84,7 @@ func Load() (*Config, error) {
 	c.App.ShutdownTimeout = getEnvAsDurationMs("SHUTDOWN_TIMEOUT_MS", 5000)
 	c.App.Version = getEnv("APP_VERSION", "0.1.0")
 
-	c.Log.Level = strings.ToLower(getEnv("LOG_LEVEL", "info"))
+	c.Log.Level = strings.ToLower(getEnv("LOG_LEVEL", "debug"))
 	c.Log.Encoding = strings.ToLower(getEnv("LOG_ENCODING", "console"))
 
 	c.CORS.AllowedOrigins = getEnvAsCSV("CORS_ALLOWED_ORIGINS", []string{"*"})

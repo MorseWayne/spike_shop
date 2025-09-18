@@ -4,16 +4,16 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 
 	// 使用下划线导入是Go语言的特殊语法，表示只执行包的初始化函数但不使用包中的标识符
 	// MySQL驱动需要在程序启动时注册自己，而我们不需要直接调用它的函数
 	// 后续通过sql.Open("mysql", dsn)时，database/sql包会自动查找已注册的mysql驱动
 	_ "github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/mysql"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	"github.com/MorseWayne/spike_shop/internal/config"
 )
@@ -58,132 +58,211 @@ func New(cfg *config.Config, logger *zap.Logger) (*DB, error) {
 	return &DB{DB: sqlDB, logger: logger}, nil
 }
 
-// RunMigrations 执行数据库迁移
+// RunMigrations 使用 go-migrate 执行数据库迁移
 // 数据库迁移是一种管理数据库结构变更的版本控制机制，通过SQL文件定义数据库模式变更
 // 主要作用是：
 // 1. 确保所有环境（开发、测试、生产）使用相同的数据库结构
 // 2. 跟踪数据库结构的变更历史
 // 3. 支持向前（应用新变更）和向后（回滚）操作
 // 4. 多人协作开发时避免数据库结构不一致
+//
+// go-migrate 相比自定义实现的优势：
+// 1. 成熟稳定的迁移管理，广泛使用
+// 2. 支持多种数据库和迁移源
+// 3. 提供完整的up/down迁移支持
+// 4. 自动处理迁移版本冲突和错误恢复
+// 5. 支持脏迁移检测和修复
 func (db *DB) RunMigrations(migrationsDir string) error {
-	// 创建 migrations 表来记录已执行的迁移
-	if err := db.createMigrationsTable(); err != nil {
-		return fmt.Errorf("create migrations table: %w", err)
-	}
-
-	// 获取已执行的迁移
-	executed, err := db.getExecutedMigrations()
+	// 创建 MySQL 数据库驱动实例
+	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
 	if err != nil {
-		return fmt.Errorf("get executed migrations: %w", err)
+		return fmt.Errorf("create mysql driver: %w", err)
 	}
 
-	// 读取迁移文件
-	files, err := filepath.Glob(filepath.Join(migrationsDir, "*.sql"))
+	// 创建 migrate 实例
+	// 使用 file:// 协议指定迁移文件目录
+	m, err := migrate.NewWithDatabaseInstance(
+		fmt.Sprintf("file://%s", migrationsDir),
+		"mysql",
+		driver,
+	)
 	if err != nil {
-		return fmt.Errorf("read migration files: %w", err)
+		return fmt.Errorf("create migrate instance: %w", err)
+	}
+	defer m.Close()
+
+	// 获取当前迁移版本
+	currentVersion, dirty, err := m.Version()
+	if err != nil && err != migrate.ErrNilVersion {
+		return fmt.Errorf("get current version: %w", err)
 	}
 
-	sort.Strings(files)
-
-	// 执行未执行的迁移
-	// 迁移文件命名采用时间戳前缀（如 20241001_001_create_users_table.sql）确保按顺序执行
-	// 这种命名约定很重要，因为它保证了迁移按预期的顺序应用
-	for _, file := range files {
-		filename := filepath.Base(file)
-		if executed[filename] {
-			db.logger.Debug("migration already executed", zap.String("file", filename))
-			continue
-		}
-
-		if err := db.executeMigration(file); err != nil {
-			return fmt.Errorf("execute migration %s: %w", filename, err)
-		}
-
-		db.logger.Info("migration executed", zap.String("file", filename))
+	if dirty {
+		return fmt.Errorf("database is in dirty state at version %d, please check and fix manually", currentVersion)
 	}
+
+	db.logger.Info("current migration version", zap.Uint("version", currentVersion))
+
+	// 执行所有待执行的迁移（up）
+	if err := m.Up(); err != nil {
+		if err == migrate.ErrNoChange {
+			db.logger.Info("no new migrations to apply")
+			return nil
+		}
+		return fmt.Errorf("run migrations: %w", err)
+	}
+
+	// 获取新版本
+	newVersion, _, err := m.Version()
+	if err != nil {
+		return fmt.Errorf("get new version: %w", err)
+	}
+
+	db.logger.Info("migrations completed successfully",
+		zap.Uint("from_version", currentVersion),
+		zap.Uint("to_version", newVersion),
+	)
 
 	return nil
 }
 
-func (db *DB) createMigrationsTable() error {
-	query := `
-		CREATE TABLE IF NOT EXISTS migrations (
-			id INT AUTO_INCREMENT PRIMARY KEY,
-			filename VARCHAR(255) NOT NULL UNIQUE,
-			executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-	`
-	_, err := db.Exec(query)
-	return err
+// MigrateDown 执行向下迁移（回滚）
+// 注意：这个方法应该谨慎使用，特别是在生产环境中
+func (db *DB) MigrateDown(migrationsDir string, steps int) error {
+	// 创建 MySQL 数据库驱动实例
+	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
+	if err != nil {
+		return fmt.Errorf("create mysql driver: %w", err)
+	}
+
+	// 创建 migrate 实例
+	m, err := migrate.NewWithDatabaseInstance(
+		fmt.Sprintf("file://%s", migrationsDir),
+		"mysql",
+		driver,
+	)
+	if err != nil {
+		return fmt.Errorf("create migrate instance: %w", err)
+	}
+	defer m.Close()
+
+	// 获取当前版本
+	currentVersion, dirty, err := m.Version()
+	if err != nil {
+		return fmt.Errorf("get current version: %w", err)
+	}
+
+	if dirty {
+		return fmt.Errorf("database is in dirty state at version %d", currentVersion)
+	}
+
+	db.logger.Info("starting migration rollback",
+		zap.Uint("current_version", currentVersion),
+		zap.Int("steps", steps),
+	)
+
+	// 执行向下迁移
+	if err := m.Steps(-steps); err != nil {
+		return fmt.Errorf("migrate down: %w", err)
+	}
+
+	// 获取新版本
+	newVersion, _, err := m.Version()
+	if err != nil && err != migrate.ErrNilVersion {
+		return fmt.Errorf("get new version: %w", err)
+	}
+
+	db.logger.Info("migration rollback completed",
+		zap.Uint("from_version", currentVersion),
+		zap.Uint("to_version", newVersion),
+	)
+
+	return nil
 }
 
-func (db *DB) getExecutedMigrations() (map[string]bool, error) {
-	executed := make(map[string]bool)
-	rows, err := db.Query("SELECT filename FROM migrations")
+// MigrateToVersion 迁移到指定版本
+func (db *DB) MigrateToVersion(migrationsDir string, version uint) error {
+	// 创建 MySQL 数据库驱动实例
+	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
 	if err != nil {
-		return executed, err
+		return fmt.Errorf("create mysql driver: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	for rows.Next() {
-		var filename string
-		if err := rows.Scan(&filename); err != nil {
-			return executed, err
+	// 创建 migrate 实例
+	m, err := migrate.NewWithDatabaseInstance(
+		fmt.Sprintf("file://%s", migrationsDir),
+		"mysql",
+		driver,
+	)
+	if err != nil {
+		return fmt.Errorf("create migrate instance: %w", err)
+	}
+	defer m.Close()
+
+	// 获取当前版本
+	currentVersion, dirty, err := m.Version()
+	if err != nil && err != migrate.ErrNilVersion {
+		return fmt.Errorf("get current version: %w", err)
+	}
+
+	if dirty {
+		return fmt.Errorf("database is in dirty state at version %d", currentVersion)
+	}
+
+	db.logger.Info("migrating to specific version",
+		zap.Uint("current_version", currentVersion),
+		zap.Uint("target_version", version),
+	)
+
+	// 迁移到指定版本
+	if err := m.Migrate(version); err != nil {
+		if err == migrate.ErrNoChange {
+			db.logger.Info("already at target version", zap.Uint("version", version))
+			return nil
 		}
-		executed[filename] = true
+		return fmt.Errorf("migrate to version %d: %w", version, err)
 	}
 
-	return executed, rows.Err()
+	db.logger.Info("migration to version completed",
+		zap.Uint("from_version", currentVersion),
+		zap.Uint("to_version", version),
+	)
+
+	return nil
 }
 
-func (db *DB) executeMigration(filepath string) error {
-	content, err := os.ReadFile(filepath)
+// ForceMigrationVersion 强制设置迁移版本状态
+// 注意：这个方法应该非常谨慎使用，只在修复脏状态时使用
+func (db *DB) ForceMigrationVersion(migrationsDir string, version uint) error {
+	// 创建 MySQL 数据库驱动实例
+	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
 	if err != nil {
-		return err
+		return fmt.Errorf("create mysql driver: %w", err)
 	}
 
-	filename := filepath[strings.LastIndex(filepath, "/")+1:]
-
-	// 分割SQL语句并逐条执行
-	// 使用分号(;)作为语句分隔符，但需要处理注释和字符串中的分号
-	sqlStatements := strings.Split(string(content), ";")
-
-	// 开始事务以确保所有SQL语句要么全部成功，要么全部失败
-	tx, err := db.Begin()
+	// 创建 migrate 实例
+	m, err := migrate.NewWithDatabaseInstance(
+		fmt.Sprintf("file://%s", migrationsDir),
+		"mysql",
+		driver,
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("create migrate instance: %w", err)
+	}
+	defer m.Close()
+
+	db.logger.Info("forcing migration version",
+		zap.Uint("version", version),
+	)
+
+	// 强制设置版本（这会清除脏状态）
+	if err := m.Force(int(version)); err != nil {
+		return fmt.Errorf("force migration version: %w", err)
 	}
 
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-			return
-		}
-		err = tx.Commit()
-	}()
-
-	// 执行每条SQL语句
-	for _, stmt := range sqlStatements {
-		// 去除语句前后的空白字符
-		stmt = strings.TrimSpace(stmt)
-		// 跳过空语句和注释行
-		if stmt == "" || strings.HasPrefix(strings.TrimLeft(stmt, " \t"), "--") {
-			continue
-		}
-
-		// 执行SQL语句
-		if _, execErr := tx.Exec(stmt); execErr != nil {
-			err = fmt.Errorf("execute SQL: %w", execErr)
-			return err
-		}
-	}
-
-	// 记录迁移已执行
-	// 通过在migrations表中记录已执行的迁移文件名，确保相同的迁移不会被重复执行
-	if _, err = tx.Exec("INSERT INTO migrations (filename) VALUES (?) ", filename); err != nil {
-		err = fmt.Errorf("record migration: %w", err)
-		return err
-	}
+	db.logger.Info("migration version forced successfully",
+		zap.Uint("version", version),
+	)
 
 	return nil
 }

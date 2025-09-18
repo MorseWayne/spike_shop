@@ -22,11 +22,3 @@ CREATE TABLE IF NOT EXISTS `products` (
   KEY `idx_price` (`price`),
   KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品表';
-
--- 插入一些测试数据
-INSERT IGNORE INTO `products` (`name`, `description`, `price`, `sku`, `brand`, `status`) VALUES 
-('iPhone 15 Pro', '苹果最新款旗舰手机，配备A17 Pro芯片', 8999.00, 'IPHONE-15-PRO-128GB', 'Apple', 'active'),
-('小米14', '小米14系列智能手机，骁龙8 Gen3处理器', 3999.00, 'MI-14-256GB-BLACK', '小米', 'active'),
-('MacBook Air M3', '全新M3芯片MacBook Air，轻薄便携', 8999.00, 'MBA-M3-13-256GB', 'Apple', 'active'),
-('索尼WH-1000XM5', '索尼旗舰降噪耳机，顶级音质体验', 2399.00, 'SONY-WH-1000XM5-BLACK', 'Sony', 'active'),
-('Nintendo Switch OLED', '任天堂Switch OLED版游戏主机', 2399.00, 'NSW-OLED-WHITE', 'Nintendo', 'active');

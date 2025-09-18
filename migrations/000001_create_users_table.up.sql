@@ -16,8 +16,3 @@ CREATE TABLE IF NOT EXISTS `users` (
   KEY `idx_role` (`role`),
   KEY `idx_is_active` (`is_active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
-
--- 插入默认管理员用户（密码为 "admin123"，实际生产环境应使用更强密码）
--- bcrypt hash for "admin123": $2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi
-INSERT IGNORE INTO `users` (`username`, `email`, `password_hash`, `role`) VALUES 
-('admin', 'admin@spike.local', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'admin');

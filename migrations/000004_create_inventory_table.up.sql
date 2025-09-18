@@ -20,12 +20,3 @@ CREATE TABLE IF NOT EXISTS `inventory` (
   CONSTRAINT `fk_inventory_product_id` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='库存表';
 
--- 为测试商品添加库存信息
-INSERT IGNORE INTO `inventory` (`product_id`, `stock`, `reorder_point`, `max_stock`) 
-SELECT `id`, 100, 10, 1000 FROM `products` WHERE `sku` IN (
-  'IPHONE-15-PRO-128GB', 
-  'MI-14-256GB-BLACK', 
-  'MBA-M3-13-256GB', 
-  'SONY-WH-1000XM5-BLACK', 
-  'NSW-OLED-WHITE'
-);
