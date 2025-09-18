@@ -40,6 +40,21 @@ type Config struct {
 		AllowedMethods []string
 		AllowedHeaders []string
 	}
+	Database struct {
+		Host     string
+		Port     int
+		User     string
+		Password string
+		DBName   string
+	}
+	JWT struct {
+		Secret          string
+		AccessTokenTTL  time.Duration
+		RefreshTokenTTL time.Duration
+	}
+	Migrations struct {
+		Dir string
+	}
 }
 
 // Load reads configuration from the environment (optionally loading a .env file if present),
@@ -59,11 +74,24 @@ func Load() (*Config, error) {
 	c.App.Version = getEnv("APP_VERSION", "0.1.0")
 
 	c.Log.Level = strings.ToLower(getEnv("LOG_LEVEL", "info"))
-	c.Log.Encoding = strings.ToLower(getEnv("LOG_ENCODING", "json"))
+	c.Log.Encoding = strings.ToLower(getEnv("LOG_ENCODING", "console"))
 
 	c.CORS.AllowedOrigins = getEnvAsCSV("CORS_ALLOWED_ORIGINS", []string{"*"})
 	c.CORS.AllowedMethods = getEnvAsCSV("CORS_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"})
 	c.CORS.AllowedHeaders = getEnvAsCSV("CORS_ALLOWED_HEADERS", []string{"Authorization", "Content-Type"})
+
+	c.Database.Host = getEnv("MYSQL_HOST", "localhost")
+	c.Database.Port = getEnvAsInt("MYSQL_PORT", 3306)
+	c.Database.User = getEnv("MYSQL_USER", "spike")
+	c.Database.Password = getEnv("MYSQL_PASSWORD", "spike")
+	c.Database.DBName = getEnv("MYSQL_DB", "spike")
+
+	c.JWT.Secret = getEnv("JWT_SECRET", "change_me_in_production")
+	c.JWT.AccessTokenTTL = getEnvAsDuration("ACCESS_TOKEN_TTL", "15m")
+	c.JWT.RefreshTokenTTL = getEnvAsDuration("REFRESH_TOKEN_TTL", "168h")
+
+	// 数据库迁移配置
+	c.Migrations.Dir = getEnv("MIGRATIONS_DIR", "migrations")
 
 	if err := validate(c); err != nil {
 		return nil, err
@@ -103,6 +131,31 @@ func validate(c *Config) error {
 		errs = append(errs, fmt.Sprintf("LOG_ENCODING must be one of json|console, got %q", c.Log.Encoding))
 	}
 
+	if strings.TrimSpace(c.Database.Host) == "" {
+		errs = append(errs, "MYSQL_HOST cannot be empty")
+	}
+	if c.Database.Port < 1 || c.Database.Port > 65535 {
+		errs = append(errs, fmt.Sprintf("MYSQL_PORT must be in range 1..65535, got %d", c.Database.Port))
+	}
+	if strings.TrimSpace(c.Database.User) == "" {
+		errs = append(errs, "MYSQL_USER cannot be empty")
+	}
+	if strings.TrimSpace(c.Database.DBName) == "" {
+		errs = append(errs, "MYSQL_DB cannot be empty")
+	}
+
+	if strings.TrimSpace(c.JWT.Secret) == "" || c.JWT.Secret == "change_me_in_production" {
+		if c.App.Env == "prod" {
+			errs = append(errs, "JWT_SECRET must be set to a secure value in production")
+		}
+	}
+	if c.JWT.AccessTokenTTL <= 0 {
+		errs = append(errs, fmt.Sprintf("ACCESS_TOKEN_TTL must be > 0, got %s", c.JWT.AccessTokenTTL))
+	}
+	if c.JWT.RefreshTokenTTL <= 0 {
+		errs = append(errs, fmt.Sprintf("REFRESH_TOKEN_TTL must be > 0, got %s", c.JWT.RefreshTokenTTL))
+	}
+
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
 	}
@@ -128,6 +181,17 @@ func getEnvAsInt(key string, def int) int {
 func getEnvAsDurationMs(key string, defMs int) time.Duration {
 	ms := getEnvAsInt(key, defMs)
 	return time.Duration(ms) * time.Millisecond
+}
+
+func getEnvAsDuration(key, def string) time.Duration {
+	v := getEnv(key, def)
+	if d, err := time.ParseDuration(v); err == nil {
+		return d
+	}
+	if d, err := time.ParseDuration(def); err == nil {
+		return d
+	}
+	return 15 * time.Minute // fallback
 }
 
 func getEnvAsCSV(key string, def []string) []string {
