@@ -55,6 +55,17 @@ type Config struct {
 	Migrations struct {
 		Dir string
 	}
+	Cache struct {
+		Enabled bool
+		TTL     time.Duration
+		Type    string // "memory" 或 "redis"
+	}
+	Redis struct {
+		Host     string
+		Port     int
+		Password string
+		DB       int
+	}
 }
 
 // Load reads configuration from the environment (optionally loading a .env file if present),
@@ -92,6 +103,17 @@ func Load() (*Config, error) {
 
 	// 数据库迁移配置
 	c.Migrations.Dir = getEnv("MIGRATIONS_DIR", "migrations")
+
+	// 缓存配置
+	c.Cache.Enabled = getEnvAsBool("CACHE_ENABLED", true)
+	c.Cache.TTL = getEnvAsDuration("CACHE_TTL", "5m")
+	c.Cache.Type = getEnv("CACHE_TYPE", "memory")
+
+	// Redis配置
+	c.Redis.Host = getEnv("REDIS_HOST", "localhost")
+	c.Redis.Port = getEnvAsInt("REDIS_PORT", 6379)
+	c.Redis.Password = getEnv("REDIS_PASSWORD", "")
+	c.Redis.DB = getEnvAsInt("REDIS_DB", 0)
 
 	if err := validate(c); err != nil {
 		return nil, err
@@ -241,4 +263,16 @@ func getEnvAsCSV(key string, def []string) []string {
 		return def
 	}
 	return out
+}
+
+func getEnvAsBool(key string, def bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		return def
+	}
+	return b
 }
