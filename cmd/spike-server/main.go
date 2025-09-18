@@ -87,6 +87,12 @@ func main() {
 	authMiddleware := mw.AuthMiddleware(jwtService, lg)
 	mux.Handle("/api/v1/users/profile", authMiddleware(http.HandlerFunc(userHandler.GetProfile)))
 
+	// 管理员专用API路由（需要管理员权限）
+	adminMiddleware := mw.RequireAdmin(lg)
+	mux.Handle("/api/v1/admin/users", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.ListUsers))))
+	mux.Handle("/api/v1/admin/users/role", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.UpdateUserRole))))
+	mux.Handle("/api/v1/admin/users/status", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.UpdateUserStatus))))
+
 	// 构建中间件链：请求进入时执行顺序为 access log → CORS → timeout → recovery → request ID
 	// 响应返回时执行顺序为 request ID → recovery → timeout → CORS → access log
 	handler := mw.RequestID(mux)

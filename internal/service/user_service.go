@@ -28,6 +28,10 @@ type UserService interface {
 	Login(req *domain.LoginRequest) (*domain.User, error)
 	GetUserByID(id int64) (*domain.User, error)
 	GetUserByUsername(username string) (*domain.User, error)
+	// 管理员专用方法
+	ListUsers(page, pageSize int) (*domain.UserListResponse, error)
+	UpdateUserRole(userID int64, role domain.UserRole) error
+	UpdateUserStatus(userID int64, isActive bool) error
 }
 
 // userService 是 UserService 接口的实现
@@ -184,4 +188,110 @@ func (s *userService) GetUserByUsername(username string) (*domain.User, error) {
 	}
 
 	return user, nil
+}
+
+// ListUsers 获取用户列表（管理员专用）
+func (s *userService) ListUsers(page, pageSize int) (*domain.UserListResponse, error) {
+	// 参数验证和默认值设置
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20 // 默认每页20个，最大100个
+	}
+
+	// 计算偏移量
+	offset := (page - 1) * pageSize
+
+	// 从仓储获取用户列表
+	users, total, err := s.userRepo.ListUsers(offset, pageSize)
+	if err != nil {
+		s.logger.Error("failed to list users", zap.Error(err))
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+
+	// 清除密码哈希信息
+	for _, user := range users {
+		user.PasswordHash = ""
+	}
+
+	return &domain.UserListResponse{
+		Users:    users,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+// UpdateUserRole 更新用户角色（管理员专用）
+func (s *userService) UpdateUserRole(userID int64, role domain.UserRole) error {
+	// 验证角色值
+	if role != domain.UserRoleUser && role != domain.UserRoleAdmin {
+		return fmt.Errorf("invalid role: %s", role)
+	}
+
+	// 检查用户是否存在
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		s.logger.Error("failed to get user", zap.Int64("user_id", userID), zap.Error(err))
+		return fmt.Errorf("get user: %w", err)
+	}
+	if user == nil {
+		return ErrUserNotFound
+	}
+
+	// 更新角色
+	if err := s.userRepo.UpdateUserRole(userID, role); err != nil {
+		s.logger.Error("failed to update user role",
+			zap.Int64("user_id", userID),
+			zap.String("role", string(role)),
+			zap.Error(err),
+		)
+		return fmt.Errorf("update user role: %w", err)
+	}
+
+	s.logger.Info("user role updated",
+		zap.Int64("user_id", userID),
+		zap.String("username", user.Username),
+		zap.String("old_role", string(user.Role)),
+		zap.String("new_role", string(role)),
+	)
+
+	return nil
+}
+
+// UpdateUserStatus 更新用户状态（管理员专用）
+func (s *userService) UpdateUserStatus(userID int64, isActive bool) error {
+	// 检查用户是否存在
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		s.logger.Error("failed to get user", zap.Int64("user_id", userID), zap.Error(err))
+		return fmt.Errorf("get user: %w", err)
+	}
+	if user == nil {
+		return ErrUserNotFound
+	}
+
+	// 更新状态
+	if err := s.userRepo.UpdateUserStatus(userID, isActive); err != nil {
+		s.logger.Error("failed to update user status",
+			zap.Int64("user_id", userID),
+			zap.Bool("is_active", isActive),
+			zap.Error(err),
+		)
+		return fmt.Errorf("update user status: %w", err)
+	}
+
+	action := "deactivated"
+	if isActive {
+		action = "activated"
+	}
+
+	s.logger.Info("user status updated",
+		zap.Int64("user_id", userID),
+		zap.String("username", user.Username),
+		zap.String("action", action),
+	)
+
+	return nil
 }

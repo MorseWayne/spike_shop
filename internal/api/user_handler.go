@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"go.uber.org/zap"
 
@@ -269,4 +270,137 @@ func containsChar(s string, c rune) bool {
 		}
 	}
 	return false
+}
+
+// ---- 管理员专用API处理器 ----
+
+// ListUsers 获取用户列表（管理员专用）
+// GET /api/v1/admin/users?page=1&page_size=20
+func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.RequestIDFromContext(r.Context())
+
+	// 解析查询参数
+	pageStr := r.URL.Query().Get("page")
+	pageSizeStr := r.URL.Query().Get("page_size")
+
+	page := 1
+	pageSize := 20
+
+	if pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	if pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
+			pageSize = ps
+		}
+	}
+
+	// 调用服务层获取用户列表
+	result, err := h.userService.ListUsers(page, pageSize)
+	if err != nil {
+		h.logger.Error("list users failed", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusInternalServerError, resp.CodeInternalError, "list users failed", reqID, "")
+		return
+	}
+
+	resp.OK(w, result, reqID, "")
+}
+
+// UpdateUserRole 更新用户角色（管理员专用）
+// PUT /api/v1/admin/users/{user_id}/role
+func (h *UserHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.RequestIDFromContext(r.Context())
+
+	// 从URL路径中提取用户ID（这里简化处理，实际应用中建议使用路由库）
+	userIDStr := r.URL.Query().Get("user_id")
+	if userIDStr == "" {
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "user_id is required", reqID, "")
+		return
+	}
+
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "invalid user_id", reqID, "")
+		return
+	}
+
+	// 解析请求体
+	var req domain.UpdateUserRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Warn("invalid request body", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "invalid request body", reqID, "")
+		return
+	}
+
+	// 验证角色值
+	if req.Role != domain.UserRoleUser && req.Role != domain.UserRoleAdmin {
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "invalid role", reqID, "")
+		return
+	}
+
+	// 调用服务层更新用户角色
+	if err := h.userService.UpdateUserRole(userID, req.Role); err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			resp.Error(w, http.StatusNotFound, resp.CodeInvalidParam, "user not found", reqID, "")
+			return
+		}
+
+		h.logger.Error("update user role failed", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusInternalServerError, resp.CodeInternalError, "update user role failed", reqID, "")
+		return
+	}
+
+	// 返回成功响应
+	result := map[string]interface{}{
+		"message": "user role updated successfully",
+	}
+	resp.OK(w, &result, reqID, "")
+}
+
+// UpdateUserStatus 更新用户状态（管理员专用）
+// PUT /api/v1/admin/users/{user_id}/status
+func (h *UserHandler) UpdateUserStatus(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.RequestIDFromContext(r.Context())
+
+	// 从URL路径中提取用户ID
+	userIDStr := r.URL.Query().Get("user_id")
+	if userIDStr == "" {
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "user_id is required", reqID, "")
+		return
+	}
+
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "invalid user_id", reqID, "")
+		return
+	}
+
+	// 解析请求体
+	var req domain.UpdateUserStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Warn("invalid request body", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "invalid request body", reqID, "")
+		return
+	}
+
+	// 调用服务层更新用户状态
+	if err := h.userService.UpdateUserStatus(userID, req.IsActive); err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			resp.Error(w, http.StatusNotFound, resp.CodeInvalidParam, "user not found", reqID, "")
+			return
+		}
+
+		h.logger.Error("update user status failed", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusInternalServerError, resp.CodeInternalError, "update user status failed", reqID, "")
+		return
+	}
+
+	// 返回成功响应
+	result := map[string]interface{}{
+		"message": "user status updated successfully",
+	}
+	resp.OK(w, &result, reqID, "")
 }

@@ -20,6 +20,10 @@ type UserRepository interface {
 	GetByEmail(email string) (*domain.User, error)
 	Update(user *domain.User) error
 	Delete(id int64) error
+	// 管理员专用方法
+	ListUsers(offset, limit int) ([]*domain.User, int64, error)
+	UpdateUserRole(userID int64, role domain.UserRole) error
+	UpdateUserStatus(userID int64, isActive bool) error
 }
 
 // userRepo 是 UserRepository 接口的数据库实现
@@ -175,6 +179,97 @@ func (r *userRepo) Delete(id int64) error {
 	_, err := r.db.Exec(query, id)
 	if err != nil {
 		return fmt.Errorf("delete user: %w", err)
+	}
+
+	return nil
+}
+
+// ListUsers 分页获取用户列表（管理员专用）
+func (r *userRepo) ListUsers(offset, limit int) ([]*domain.User, int64, error) {
+	// 获取总数
+	var total int64
+	countQuery := `SELECT COUNT(*) FROM users`
+	if err := r.db.QueryRow(countQuery).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+
+	// 获取用户列表
+	query := `
+		SELECT id, username, email, password_hash, role, is_active, created_at, updated_at
+		FROM users 
+		ORDER BY created_at DESC 
+		LIMIT ? OFFSET ?
+	`
+
+	rows, err := r.db.Query(query, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*domain.User
+	for rows.Next() {
+		user := &domain.User{}
+		err := rows.Scan(
+			&user.ID,
+			&user.Username,
+			&user.Email,
+			&user.PasswordHash,
+			&user.Role,
+			&user.IsActive,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("scan user: %w", err)
+		}
+		users = append(users, user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate users: %w", err)
+	}
+
+	return users, total, nil
+}
+
+// UpdateUserRole 更新用户角色（管理员专用）
+func (r *userRepo) UpdateUserRole(userID int64, role domain.UserRole) error {
+	query := `UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+
+	result, err := r.db.Exec(query, string(role), userID)
+	if err != nil {
+		return fmt.Errorf("update user role: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get affected rows: %w", err)
+	}
+
+	if affected == 0 {
+		return fmt.Errorf("user not found")
+	}
+
+	return nil
+}
+
+// UpdateUserStatus 更新用户状态（管理员专用）
+func (r *userRepo) UpdateUserStatus(userID int64, isActive bool) error {
+	query := `UPDATE users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+
+	result, err := r.db.Exec(query, isActive, userID)
+	if err != nil {
+		return fmt.Errorf("update user status: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get affected rows: %w", err)
+	}
+
+	if affected == 0 {
+		return fmt.Errorf("user not found")
 	}
 
 	return nil

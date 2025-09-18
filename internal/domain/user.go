@@ -56,3 +56,29 @@ type LoginResponse struct {
 type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
+
+// 管理员相关请求响应结构
+
+// UserListRequest 表示用户列表查询请求
+type UserListRequest struct {
+	Page     int `json:"page"`      // 页码，从1开始
+	PageSize int `json:"page_size"` // 每页大小
+}
+
+// UserListResponse 表示用户列表查询响应
+type UserListResponse struct {
+	Users    []*User `json:"users"`     // 用户列表
+	Total    int64   `json:"total"`     // 总用户数
+	Page     int     `json:"page"`      // 当前页码
+	PageSize int     `json:"page_size"` // 每页大小
+}
+
+// UpdateUserRoleRequest 表示更新用户角色请求
+type UpdateUserRoleRequest struct {
+	Role UserRole `json:"role" binding:"required"`
+}
+
+// UpdateUserStatusRequest 表示更新用户状态请求
+type UpdateUserStatusRequest struct {
+	IsActive bool `json:"is_active"`
+}
