@@ -7,6 +7,7 @@ import (
 
 	"github.com/MorseWayne/spike_shop/internal/config"
 	"github.com/MorseWayne/spike_shop/internal/logger"
+	"github.com/MorseWayne/spike_shop/internal/resp"
 )
 
 func main() {
@@ -23,9 +24,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		data := map[string]any{
+			"status":  "ok",
+			"version": cfg.App.Version,
+		}
+		resp.OK(w, &data, "", "")
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.App.Port)
