@@ -1,3 +1,5 @@
+// Package config 负责应用配置的加载（环境变量优先）、默认值设定与启动前校验。
+// 约定：环境变量优先于 .env 文件；非法配置会在启动阶段直接失败并给出清晰错误。
 package config
 
 import (
@@ -11,8 +13,15 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Config represents application runtime configuration loaded from environment variables.
-// Environment variables take precedence over values defined in .env file.
+// Config 表示应用运行时配置，来源于环境变量（若存在 .env 会被优先装载，但不会覆盖已存在的环境变量）。
+// 建议的环境变量（与默认值）：
+//   - APP_NAME=spike-server
+//   - APP_ENV=dev|test|prod（默认 dev）
+//   - APP_PORT（默认 8080）
+//   - REQUEST_TIMEOUT_MS（默认 5000）
+//   - LOG_LEVEL=debug|info|warn|error（默认 info）
+//   - LOG_ENCODING=json|console（默认 json）
+//   - CORS_ALLOWED_ORIGINS, CORS_ALLOWED_METHODS, CORS_ALLOWED_HEADERS（CSV）
 type Config struct {
 	App struct {
 		Name           string

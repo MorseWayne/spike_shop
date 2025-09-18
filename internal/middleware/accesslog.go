@@ -7,7 +7,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// AccessLog logs basic HTTP access information.
+// AccessLog 记录基础 HTTP 访问日志：method/path/status/duration/request_id。
+// 注意：为了准确获取 status code，采用包装的 ResponseWriter。
 func AccessLog(logger *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

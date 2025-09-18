@@ -5,13 +5,14 @@ import (
 	"strings"
 )
 
+// CORSConfig 表示允许的跨域配置，均为白名单列表（大小写不敏感由调用方保证）。
 type CORSConfig struct {
 	AllowedOrigins []string
 	AllowedMethods []string
 	AllowedHeaders []string
 }
 
-// CORS sets CORS headers according to config and handles preflight requests.
+// CORS 根据配置设置 CORS 响应头，并处理预检（OPTIONS）请求。
 func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
 	allowedOrigins := strings.Join(cfg.AllowedOrigins, ", ")
 	allowedMethods := strings.Join(cfg.AllowedMethods, ", ")

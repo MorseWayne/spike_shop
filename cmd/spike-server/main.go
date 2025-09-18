@@ -12,6 +12,11 @@ import (
 	"github.com/MorseWayne/spike_shop/internal/resp"
 )
 
+// main 为应用入口：
+// 1) 加载并校验配置；
+// 2) 初始化结构化日志；
+// 3) 构建路由与中间件链；
+// 4) 启动 HTTP 服务。
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -24,6 +29,7 @@ func main() {
 		log.Fatalf("init logger: %v", err)
 	}
 
+	// 标准库 ServeMux 即可满足当前需求（后续可替换为 chi/gin）
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		data := map[string]any{

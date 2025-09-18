@@ -8,7 +8,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Recovery captures panics and responds with a structured error.
+// Recovery 捕获 handler 链中的 panic：
+// - 记录 panic 值与堆栈；
+// - 返回统一的 500 错误响应；
+// - 透传请求 ID 便于排查。
 func Recovery(logger *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

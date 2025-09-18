@@ -1,3 +1,5 @@
+// Package logger 提供统一的 zap 日志初始化：按 env/level/encoding 输出结构化日志。
+// 默认输出到 stdout/stderr，追加公共字段（service/version/env/pid）。
 package logger
 
 import (
@@ -8,8 +10,10 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// New builds a zap.Logger according to env and encoding preferences.
-// env: dev|test|prod; level: debug|info|warn|error; encoding: json|console
+// New 根据 env/level/encoding 构建 *zap.Logger。
+// - env: dev|test|prod（dev 使用 DevelopmentConfig，prod 使用 ProductionConfig）
+// - level: debug|info|warn|error
+// - encoding: json|console（生产建议 json）
 func New(env, level, encoding, serviceName, version string) (*zap.Logger, error) {
 	var cfg zap.Config
 	if env == "prod" {
