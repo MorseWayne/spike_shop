@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/MorseWayne/spike_shop/internal/config"
 	"github.com/MorseWayne/spike_shop/internal/logger"
+	mw "github.com/MorseWayne/spike_shop/internal/middleware"
 	"github.com/MorseWayne/spike_shop/internal/resp"
 )
 
@@ -31,9 +33,21 @@ func main() {
 		resp.OK(w, &data, "", "")
 	})
 
+	// Build middleware chain: request ID -> recovery -> timeout -> CORS -> access log
+	handler := mw.RequestID(mux)
+	handler = mw.Recovery(lg)(handler)
+	handler = mw.Timeout(cfg.App.RequestTimeout)(handler)
+	handler = mw.CORS(mw.CORSConfig{
+		AllowedOrigins: cfg.CORS.AllowedOrigins,
+		AllowedMethods: cfg.CORS.AllowedMethods,
+		AllowedHeaders: cfg.CORS.AllowedHeaders,
+	})(handler)
+	handler = mw.AccessLog(lg)(handler)
+
 	addr := fmt.Sprintf(":%d", cfg.App.Port)
 	lg.Sugar().Infow("server starting", "addr", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil && err != http.ErrServerClosed {
+	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		lg.Sugar().Fatalw("server error", "err", err)
 	}
 }
