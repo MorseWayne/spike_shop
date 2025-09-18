@@ -34,12 +34,13 @@ func main() {
 
 	// 标准库 ServeMux 即可满足当前需求（后续可替换为 chi/gin）
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		reqID := mw.RequestIDFromContext(r.Context())
 		data := map[string]any{
 			"status":  "ok",
 			"version": cfg.App.Version,
 		}
-		resp.OK(w, &data, "", "")
+		resp.OK(w, &data, reqID, "")
 	})
 
 	// Build middleware chain: request ID -> recovery -> timeout -> CORS -> access log
