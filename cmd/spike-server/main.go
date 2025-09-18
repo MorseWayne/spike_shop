@@ -19,56 +19,57 @@ import (
 	"github.com/MorseWayne/spike_shop/internal/repo"
 	"github.com/MorseWayne/spike_shop/internal/resp"
 	"github.com/MorseWayne/spike_shop/internal/service"
+	"go.uber.org/zap"
 )
 
-// main 为应用入口：
-// 1) 加载并校验配置；
-// 2) 初始化结构化日志；
-// 3) 初始化数据库连接并执行迁移；
-// 4) 构建路由与中间件链；
-// 5) 启动 HTTP 服务。
-func main() {
+// AppDependencies 包含应用的所有依赖
+type AppDependencies struct {
+	UserHandler      *api.UserHandler
+	ProductHandler   *api.ProductHandler
+	InventoryHandler *api.InventoryHandler
+	JWTService       service.JWTService
+}
+
+// initConfigAndLogger 初始化配置和日志器
+func initConfigAndLogger() (*config.Config, *zap.Logger, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("invalid configuration: %v", err)
+		return nil, nil, fmt.Errorf("invalid configuration: %v", err)
 	}
 
 	// init logger
 	lg, err := logger.New(cfg.App.Env, cfg.Log.Level, cfg.Log.Encoding, cfg.App.Name, cfg.App.Version)
 	if err != nil {
-		log.Fatalf("init logger: %v", err)
+		return nil, nil, fmt.Errorf("init logger: %v", err)
 	}
 
+	return cfg, lg, nil
+}
+
+// initDatabase 初始化数据库连接并执行迁移
+func initDatabase(cfg *config.Config, lg *zap.Logger) (*database.DB, error) {
 	// 初始化数据库连接
 	db, err := database.New(cfg, lg)
 	if err != nil {
-		lg.Sugar().Fatalw("failed to initialize database", "err", err)
+		return nil, fmt.Errorf("failed to initialize database: %v", err)
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			lg.Sugar().Errorw("failed to close database connection", "err", err)
-		}
-	}()
 
 	// 执行数据库迁移
 	// 最佳实践：在应用启动时、HTTP服务器启动前执行数据库迁移
 	// 这样可以确保在处理请求前，数据库结构已经完全准备好
-	// 从环境变量获取迁移目录路径，如果未设置则使用默认值
 	// 从配置中获取迁移目录路径
 	migrationsDir := cfg.Migrations.Dir
 	lg.Sugar().Infow("using migrations directory", "path", migrationsDir)
 
 	if err := db.RunMigrations(migrationsDir); err != nil {
-		lg.Sugar().Fatalw("failed to run database migrations", "err", err, "dir", migrationsDir)
+		return nil, fmt.Errorf("failed to run database migrations: %v", err)
 	}
 
-	// 初始化依赖注入链：仓储 -> 服务 -> API处理器
-	userRepo := repo.NewUserRepository(db)
-	userService := service.NewUserService(userRepo, lg)
-	jwtService := service.NewJWTService(cfg, lg)
-	userHandler := api.NewUserHandler(userService, jwtService, lg)
+	return db, nil
+}
 
-	// 初始化缓存
+// initCache 初始化缓存实例
+func initCache(cfg *config.Config, lg *zap.Logger) cache.Cache {
 	var cacheInstance cache.Cache
 	if cfg.Cache.Enabled {
 		switch cfg.Cache.Type {
@@ -95,6 +96,16 @@ func main() {
 		cacheInstance = cache.NewNullCache()
 		lg.Sugar().Infow("cache disabled")
 	}
+	return cacheInstance
+}
+
+// initDependencies 初始化应用依赖（仓储、服务、处理器）
+func initDependencies(cfg *config.Config, db *database.DB, cacheInstance cache.Cache, lg *zap.Logger) *AppDependencies {
+	// 初始化依赖注入链：仓储 -> 服务 -> API处理器
+	userRepo := repo.NewUserRepository(db)
+	userService := service.NewUserService(userRepo, lg)
+	jwtService := service.NewJWTService(cfg, lg)
+	userHandler := api.NewUserHandler(userService, jwtService, lg)
 
 	// 商品和库存相关
 	baseProductRepo := repo.NewProductRepository(db.DB)
@@ -117,8 +128,19 @@ func main() {
 	productHandler := api.NewProductHandler(productService, lg)
 	inventoryHandler := api.NewInventoryHandler(inventoryService, lg)
 
+	return &AppDependencies{
+		UserHandler:      userHandler,
+		ProductHandler:   productHandler,
+		InventoryHandler: inventoryHandler,
+		JWTService:       jwtService,
+	}
+}
+
+// setupRoutes 设置路由和中间件
+func setupRoutes(cfg *config.Config, deps *AppDependencies, lg *zap.Logger) http.Handler {
 	// 标准库 ServeMux 即可满足当前需求（后续可替换为 chi/gin）
 	mux := http.NewServeMux()
+
 	// 健康检查端点
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		reqID := mw.RequestIDFromContext(r.Context())
@@ -130,37 +152,37 @@ func main() {
 	})
 
 	// 用户认证相关API路由（无需认证）
-	mux.HandleFunc("/api/v1/auth/register", userHandler.Register)
-	mux.HandleFunc("/api/v1/auth/login", userHandler.Login)
-	mux.HandleFunc("/api/v1/auth/refresh", userHandler.RefreshToken)
+	mux.HandleFunc("/api/v1/auth/register", deps.UserHandler.Register)
+	mux.HandleFunc("/api/v1/auth/login", deps.UserHandler.Login)
+	mux.HandleFunc("/api/v1/auth/refresh", deps.UserHandler.RefreshToken)
 
 	// 需要认证的API路由
-	authMiddleware := mw.AuthMiddleware(jwtService, lg)
-	mux.Handle("/api/v1/users/profile", authMiddleware(http.HandlerFunc(userHandler.GetProfile)))
+	authMiddleware := mw.AuthMiddleware(deps.JWTService, lg)
+	mux.Handle("/api/v1/users/profile", authMiddleware(http.HandlerFunc(deps.UserHandler.GetProfile)))
 
 	// 商品相关API路由
 	// 公开访问（无需认证）
 	mux.HandleFunc("/api/v1/products", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			productHandler.ListProducts(w, r)
+			deps.ProductHandler.ListProducts(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	mux.HandleFunc("/api/v1/products/search", productHandler.SearchProducts)
-	mux.Handle("/api/v1/products/with-inventory", http.HandlerFunc(productHandler.GetProductsWithInventory))
+	mux.HandleFunc("/api/v1/products/search", deps.ProductHandler.SearchProducts)
+	mux.Handle("/api/v1/products/with-inventory", http.HandlerFunc(deps.ProductHandler.GetProductsWithInventory))
 
 	// 商品详情和库存查询（无需认证）
 	mux.HandleFunc("/api/v1/products/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/inventory") {
-			inventoryHandler.GetInventoryByProductID(w, r)
+			deps.InventoryHandler.GetInventoryByProductID(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/inventory/check") {
-			inventoryHandler.CheckStockAvailability(w, r)
+			deps.InventoryHandler.CheckStockAvailability(w, r)
 		} else {
 			switch r.Method {
 			case http.MethodGet:
-				productHandler.GetProduct(w, r)
+				deps.ProductHandler.GetProduct(w, r)
 			default:
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
@@ -168,13 +190,13 @@ func main() {
 	})
 
 	// 库存操作（需要认证）
-	mux.Handle("/api/v1/inventory/reserve", authMiddleware(http.HandlerFunc(inventoryHandler.ReserveStock)))
-	mux.Handle("/api/v1/inventory/release", authMiddleware(http.HandlerFunc(inventoryHandler.ReleaseStock)))
-	mux.Handle("/api/v1/inventory/consume", authMiddleware(http.HandlerFunc(inventoryHandler.ConsumeStock)))
+	mux.Handle("/api/v1/inventory/reserve", authMiddleware(http.HandlerFunc(deps.InventoryHandler.ReserveStock)))
+	mux.Handle("/api/v1/inventory/release", authMiddleware(http.HandlerFunc(deps.InventoryHandler.ReleaseStock)))
+	mux.Handle("/api/v1/inventory/consume", authMiddleware(http.HandlerFunc(deps.InventoryHandler.ConsumeStock)))
 	mux.Handle("/api/v1/inventory", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			inventoryHandler.ListInventories(w, r)
+			deps.InventoryHandler.ListInventories(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -184,40 +206,40 @@ func main() {
 	adminMiddleware := mw.RequireAdmin(lg)
 
 	// 用户管理
-	mux.Handle("/api/v1/admin/users", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.ListUsers))))
-	mux.Handle("/api/v1/admin/users/role", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.UpdateUserRole))))
-	mux.Handle("/api/v1/admin/users/status", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.UpdateUserStatus))))
+	mux.Handle("/api/v1/admin/users", authMiddleware(adminMiddleware(http.HandlerFunc(deps.UserHandler.ListUsers))))
+	mux.Handle("/api/v1/admin/users/role", authMiddleware(adminMiddleware(http.HandlerFunc(deps.UserHandler.UpdateUserRole))))
+	mux.Handle("/api/v1/admin/users/status", authMiddleware(adminMiddleware(http.HandlerFunc(deps.UserHandler.UpdateUserStatus))))
 
 	// 商品管理
 	mux.Handle("/api/v1/admin/products", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
-			productHandler.CreateProduct(w, r)
+			deps.ProductHandler.CreateProduct(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))))
 	mux.Handle("/api/v1/admin/products/", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/inventory/adjust") {
-			inventoryHandler.AdjustStock(w, r)
+			deps.InventoryHandler.AdjustStock(w, r)
 		} else {
 			switch r.Method {
 			case http.MethodPut:
-				productHandler.UpdateProduct(w, r)
+				deps.ProductHandler.UpdateProduct(w, r)
 			case http.MethodDelete:
-				productHandler.DeleteProduct(w, r)
+				deps.ProductHandler.DeleteProduct(w, r)
 			default:
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
 		}
 	}))))
-	mux.Handle("/api/v1/admin/products/stats", authMiddleware(adminMiddleware(http.HandlerFunc(productHandler.GetProductStats))))
+	mux.Handle("/api/v1/admin/products/stats", authMiddleware(adminMiddleware(http.HandlerFunc(deps.ProductHandler.GetProductStats))))
 
 	// 库存管理
 	mux.Handle("/api/v1/admin/inventory", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
-			inventoryHandler.CreateInventory(w, r)
+			deps.InventoryHandler.CreateInventory(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -225,15 +247,15 @@ func main() {
 	mux.Handle("/api/v1/admin/inventory/", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			inventoryHandler.GetInventory(w, r)
+			deps.InventoryHandler.GetInventory(w, r)
 		case http.MethodPut:
-			inventoryHandler.UpdateInventory(w, r)
+			deps.InventoryHandler.UpdateInventory(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))))
-	mux.Handle("/api/v1/admin/inventory/alerts/low-stock", authMiddleware(adminMiddleware(http.HandlerFunc(inventoryHandler.GetLowStockAlerts))))
-	mux.Handle("/api/v1/admin/inventory/stats", authMiddleware(adminMiddleware(http.HandlerFunc(inventoryHandler.GetInventoryStats))))
+	mux.Handle("/api/v1/admin/inventory/alerts/low-stock", authMiddleware(adminMiddleware(http.HandlerFunc(deps.InventoryHandler.GetLowStockAlerts))))
+	mux.Handle("/api/v1/admin/inventory/stats", authMiddleware(adminMiddleware(http.HandlerFunc(deps.InventoryHandler.GetInventoryStats))))
 
 	// 构建中间件链：请求进入时执行顺序为 access log → CORS → timeout → recovery → request ID
 	// 响应返回时执行顺序为 request ID → recovery → timeout → CORS → access log
@@ -247,6 +269,11 @@ func main() {
 	})(handler)
 	handler = mw.AccessLog(lg)(handler)
 
+	return handler
+}
+
+// startServer 启动服务器并处理优雅关闭
+func startServer(cfg *config.Config, handler http.Handler, lg *zap.Logger) {
 	addr := fmt.Sprintf(":%d", cfg.App.Port)
 	lg.Sugar().Infow("server starting", "addr", addr)
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
@@ -276,4 +303,36 @@ func main() {
 		lg.Sugar().Errorw("server shutdown error", "err", err)
 	}
 	lg.Sugar().Infow("server exited")
+}
+
+// main 为应用入口，协调各个组件的初始化和启动
+func main() {
+	// 1) 加载配置和初始化日志
+	cfg, lg, err := initConfigAndLogger()
+	if err != nil {
+		log.Fatalf("failed to initialize config and logger: %v", err)
+	}
+
+	// 2) 初始化数据库连接并执行迁移
+	db, err := initDatabase(cfg, lg)
+	if err != nil {
+		lg.Sugar().Fatalw("failed to initialize database", "err", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			lg.Sugar().Errorw("failed to close database connection", "err", err)
+		}
+	}()
+
+	// 3) 初始化缓存
+	cacheInstance := initCache(cfg, lg)
+
+	// 4) 初始化应用依赖（仓储、服务、处理器）
+	deps := initDependencies(cfg, db, cacheInstance, lg)
+
+	// 5) 设置路由和中间件
+	handler := setupRoutes(cfg, deps, lg)
+
+	// 6) 启动 HTTP 服务器
+	startServer(cfg, handler, lg)
 }
