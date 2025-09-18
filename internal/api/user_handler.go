@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"go.uber.org/zap"
 
@@ -19,13 +18,15 @@ import (
 // UserHandler 用户相关的HTTP处理器
 type UserHandler struct {
 	userService service.UserService
+	jwtService  service.JWTService
 	logger      *zap.Logger
 }
 
 // NewUserHandler 创建用户处理器实例
-func NewUserHandler(userService service.UserService, logger *zap.Logger) *UserHandler {
+func NewUserHandler(userService service.UserService, jwtService service.JWTService, logger *zap.Logger) *UserHandler {
 	return &UserHandler{
 		userService: userService,
+		jwtService:  jwtService,
 		logger:      logger,
 	}
 }
@@ -115,19 +116,26 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: 生成JWT令牌（下一步实现）
-	// 现在先返回用户信息，等JWT实现后再添加令牌
-	loginResp := map[string]interface{}{
-		"user": map[string]interface{}{
-			"id":         user.ID,
-			"username":   user.Username,
-			"email":      user.Email,
-			"role":       user.Role,
-			"is_active":  user.IsActive,
-			"created_at": user.CreatedAt,
+	// 生成JWT令牌对
+	tokenPair, err := h.jwtService.GenerateTokenPair(user)
+	if err != nil {
+		h.logger.Error("failed to generate tokens", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusInternalServerError, resp.CodeInternalError, "token generation failed", reqID, "")
+		return
+	}
+
+	// 构建登录响应
+	loginResp := &domain.LoginResponse{
+		User: &domain.User{
+			ID:        user.ID,
+			Username:  user.Username,
+			Email:     user.Email,
+			Role:      user.Role,
+			IsActive:  user.IsActive,
+			CreatedAt: user.CreatedAt,
 		},
-		// "access_token": "待实现",
-		// "refresh_token": "待实现",
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
 	}
 
 	resp.OK(w, &loginResp, reqID, "")
@@ -135,25 +143,20 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 // GetProfile 获取当前用户信息
 // GET /api/v1/users/profile
+// 需要认证：使用AuthMiddleware保护
 func (h *UserHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	reqID := middleware.RequestIDFromContext(r.Context())
 
-	// TODO: 从JWT中获取用户ID（下一步实现）
-	// 现在先从查询参数获取用户ID作为临时方案
-	userIDStr := r.URL.Query().Get("user_id")
-	if userIDStr == "" {
-		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "user_id is required", reqID, "")
+	// 从JWT中获取当前用户信息
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		h.logger.Error("user not found in context", zap.String("request_id", reqID))
+		resp.Error(w, http.StatusUnauthorized, resp.CodeInternalError, "authentication required", reqID, "")
 		return
 	}
 
-	userID, err := strconv.ParseInt(userIDStr, 10, 64)
-	if err != nil {
-		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "invalid user_id", reqID, "")
-		return
-	}
-
-	// 获取用户信息
-	user, err := h.userService.GetUserByID(userID)
+	// 从数据库获取最新的用户信息（确保数据是最新的）
+	fullUser, err := h.userService.GetUserByID(user.ID)
 	if err != nil {
 		if errors.Is(err, service.ErrUserNotFound) {
 			resp.Error(w, http.StatusNotFound, resp.CodeInvalidParam, "user not found", reqID, "")
@@ -167,16 +170,51 @@ func (h *UserHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 
 	// 返回用户信息（不包含密码哈希）
 	userResp := map[string]interface{}{
-		"id":         user.ID,
-		"username":   user.Username,
-		"email":      user.Email,
-		"role":       user.Role,
-		"is_active":  user.IsActive,
-		"created_at": user.CreatedAt,
-		"updated_at": user.UpdatedAt,
+		"id":         fullUser.ID,
+		"username":   fullUser.Username,
+		"email":      fullUser.Email,
+		"role":       fullUser.Role,
+		"is_active":  fullUser.IsActive,
+		"created_at": fullUser.CreatedAt,
+		"updated_at": fullUser.UpdatedAt,
 	}
 
 	resp.OK(w, &userResp, reqID, "")
+}
+
+// RefreshToken 刷新访问令牌
+// POST /api/v1/auth/refresh
+func (h *UserHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.RequestIDFromContext(r.Context())
+
+	// 解析请求体
+	var req domain.RefreshTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Warn("invalid request body", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusBadRequest, resp.CodeInvalidParam, "invalid request body", reqID, "")
+		return
+	}
+
+	// 验证刷新令牌并生成新的令牌对
+	tokenPair, err := h.jwtService.RefreshTokenPair(req.RefreshToken)
+	if err != nil {
+		// 根据错误类型返回不同的响应
+		if errors.Is(err, service.ErrTokenExpired) {
+			resp.Error(w, http.StatusUnauthorized, resp.CodeInvalidParam, "refresh token expired", reqID, "")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidToken) {
+			resp.Error(w, http.StatusUnauthorized, resp.CodeInvalidParam, "invalid refresh token", reqID, "")
+			return
+		}
+
+		h.logger.Error("refresh token failed", zap.String("request_id", reqID), zap.Error(err))
+		resp.Error(w, http.StatusInternalServerError, resp.CodeInternalError, "refresh token failed", reqID, "")
+		return
+	}
+
+	// 返回新的令牌对
+	resp.OK(w, tokenPair, reqID, "")
 }
 
 // validateRegisterRequest 验证注册请求
