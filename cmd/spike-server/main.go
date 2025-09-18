@@ -9,11 +9,14 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/MorseWayne/spike_shop/internal/api"
 	"github.com/MorseWayne/spike_shop/internal/config"
 	"github.com/MorseWayne/spike_shop/internal/database"
 	"github.com/MorseWayne/spike_shop/internal/logger"
 	mw "github.com/MorseWayne/spike_shop/internal/middleware"
+	"github.com/MorseWayne/spike_shop/internal/repo"
 	"github.com/MorseWayne/spike_shop/internal/resp"
+	"github.com/MorseWayne/spike_shop/internal/service"
 )
 
 // main 为应用入口：
@@ -52,13 +55,19 @@ func main() {
 	// 从配置中获取迁移目录路径
 	migrationsDir := cfg.Migrations.Dir
 	lg.Sugar().Infow("using migrations directory", "path", migrationsDir)
-	
+
 	if err := db.RunMigrations(migrationsDir); err != nil {
 		lg.Sugar().Fatalw("failed to run database migrations", "err", err, "dir", migrationsDir)
 	}
 
+	// 初始化依赖注入链：仓储 -> 服务 -> API处理器
+	userRepo := repo.NewUserRepository(db)
+	userService := service.NewUserService(userRepo, lg)
+	userHandler := api.NewUserHandler(userService, lg)
+
 	// 标准库 ServeMux 即可满足当前需求（后续可替换为 chi/gin）
 	mux := http.NewServeMux()
+	// 健康检查端点
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		reqID := mw.RequestIDFromContext(r.Context())
 		data := map[string]any{
@@ -67,6 +76,11 @@ func main() {
 		}
 		resp.OK(w, &data, reqID, "")
 	})
+
+	// 用户认证相关API路由
+	mux.HandleFunc("/api/v1/auth/register", userHandler.Register)
+	mux.HandleFunc("/api/v1/auth/login", userHandler.Login)
+	mux.HandleFunc("/api/v1/users/profile", userHandler.GetProfile)
 
 	// 构建中间件链：请求进入时执行顺序为 access log → CORS → timeout → recovery → request ID
 	// 响应返回时执行顺序为 request ID → recovery → timeout → CORS → access log

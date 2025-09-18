@@ -102,6 +102,20 @@ func Load() (*Config, error) {
 func validate(c *Config) error {
 	var errs []string
 
+	errs = append(errs, validateApp(c)...)
+	errs = append(errs, validateLog(c)...)
+	errs = append(errs, validateDatabase(c)...)
+	errs = append(errs, validateJWT(c)...)
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func validateApp(c *Config) []string {
+	var errs []string
+
 	switch c.App.Env {
 	case "dev", "test", "prod":
 		// ok
@@ -117,6 +131,12 @@ func validate(c *Config) error {
 		errs = append(errs, fmt.Sprintf("REQUEST_TIMEOUT_MS must be > 0, got %s", c.App.RequestTimeout))
 	}
 
+	return errs
+}
+
+func validateLog(c *Config) []string {
+	var errs []string
+
 	switch c.Log.Level {
 	case "debug", "info", "warn", "error":
 		// ok
@@ -131,6 +151,12 @@ func validate(c *Config) error {
 		errs = append(errs, fmt.Sprintf("LOG_ENCODING must be one of json|console, got %q", c.Log.Encoding))
 	}
 
+	return errs
+}
+
+func validateDatabase(c *Config) []string {
+	var errs []string
+
 	if strings.TrimSpace(c.Database.Host) == "" {
 		errs = append(errs, "MYSQL_HOST cannot be empty")
 	}
@@ -144,6 +170,12 @@ func validate(c *Config) error {
 		errs = append(errs, "MYSQL_DB cannot be empty")
 	}
 
+	return errs
+}
+
+func validateJWT(c *Config) []string {
+	var errs []string
+
 	if strings.TrimSpace(c.JWT.Secret) == "" || c.JWT.Secret == "change_me_in_production" {
 		if c.App.Env == "prod" {
 			errs = append(errs, "JWT_SECRET must be set to a secure value in production")
@@ -156,10 +188,7 @@ func validate(c *Config) error {
 		errs = append(errs, fmt.Sprintf("REFRESH_TOKEN_TTL must be > 0, got %s", c.JWT.RefreshTokenTTL))
 	}
 
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
-	}
-	return nil
+	return errs
 }
 
 func getEnv(key, def string) string {

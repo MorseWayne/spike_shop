@@ -12,7 +12,7 @@ import (
 func TestHealthz_OK(t *testing.T) {
 	// Build a minimal mux identical to main's handler for /healthz
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		data := map[string]any{
 			"status":  "ok",
 			"version": "test",
