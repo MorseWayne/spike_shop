@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/MorseWayne/spike_shop/internal/api"
+	"github.com/MorseWayne/spike_shop/internal/cache"
 	"github.com/MorseWayne/spike_shop/internal/config"
 	"github.com/MorseWayne/spike_shop/internal/database"
 	"github.com/MorseWayne/spike_shop/internal/logger"
@@ -66,6 +68,55 @@ func main() {
 	jwtService := service.NewJWTService(cfg, lg)
 	userHandler := api.NewUserHandler(userService, jwtService, lg)
 
+	// 初始化缓存
+	var cacheInstance cache.Cache
+	if cfg.Cache.Enabled {
+		switch cfg.Cache.Type {
+		case "redis":
+			redisAddr := fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
+			redisCache, err := cache.NewRedisCache(redisAddr, cfg.Redis.Password, cfg.Redis.DB)
+			if err != nil {
+				lg.Sugar().Warnw("failed to connect to Redis, falling back to memory cache", "error", err)
+				cacheInstance = cache.NewMemoryCache()
+				lg.Sugar().Infow("cache enabled", "type", "memory (fallback)", "ttl", cfg.Cache.TTL)
+			} else {
+				cacheInstance = redisCache
+				lg.Sugar().Infow("cache enabled", "type", "redis", "addr", redisAddr, "ttl", cfg.Cache.TTL)
+			}
+		case "memory":
+			cacheInstance = cache.NewMemoryCache()
+			lg.Sugar().Infow("cache enabled", "type", "memory", "ttl", cfg.Cache.TTL)
+		default:
+			lg.Sugar().Warnw("unknown cache type, using memory cache", "type", cfg.Cache.Type)
+			cacheInstance = cache.NewMemoryCache()
+			lg.Sugar().Infow("cache enabled", "type", "memory (default)", "ttl", cfg.Cache.TTL)
+		}
+	} else {
+		cacheInstance = cache.NewNullCache()
+		lg.Sugar().Infow("cache disabled")
+	}
+
+	// 商品和库存相关
+	baseProductRepo := repo.NewProductRepository(db.DB)
+	baseInventoryRepo := repo.NewInventoryRepository(db.DB)
+
+	// 可选缓存装饰器
+	var productRepo repo.ProductRepository
+	var inventoryRepo repo.InventoryRepository
+
+	if cfg.Cache.Enabled {
+		productRepo = repo.NewCachedProductRepository(baseProductRepo, cacheInstance, cfg.Cache.TTL)
+		inventoryRepo = repo.NewCachedInventoryRepository(baseInventoryRepo, cacheInstance, cfg.Cache.TTL)
+	} else {
+		productRepo = baseProductRepo
+		inventoryRepo = baseInventoryRepo
+	}
+
+	productService := service.NewProductService(productRepo, inventoryRepo)
+	inventoryService := service.NewInventoryService(inventoryRepo, productRepo)
+	productHandler := api.NewProductHandler(productService, lg)
+	inventoryHandler := api.NewInventoryHandler(inventoryService, lg)
+
 	// 标准库 ServeMux 即可满足当前需求（后续可替换为 chi/gin）
 	mux := http.NewServeMux()
 	// 健康检查端点
@@ -87,11 +138,102 @@ func main() {
 	authMiddleware := mw.AuthMiddleware(jwtService, lg)
 	mux.Handle("/api/v1/users/profile", authMiddleware(http.HandlerFunc(userHandler.GetProfile)))
 
+	// 商品相关API路由
+	// 公开访问（无需认证）
+	mux.HandleFunc("/api/v1/products", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			productHandler.ListProducts(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/v1/products/search", productHandler.SearchProducts)
+	mux.Handle("/api/v1/products/with-inventory", http.HandlerFunc(productHandler.GetProductsWithInventory))
+
+	// 商品详情和库存查询（无需认证）
+	mux.HandleFunc("/api/v1/products/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/inventory") {
+			inventoryHandler.GetInventoryByProductID(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/inventory/check") {
+			inventoryHandler.CheckStockAvailability(w, r)
+		} else {
+			switch r.Method {
+			case http.MethodGet:
+				productHandler.GetProduct(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		}
+	})
+
+	// 库存操作（需要认证）
+	mux.Handle("/api/v1/inventory/reserve", authMiddleware(http.HandlerFunc(inventoryHandler.ReserveStock)))
+	mux.Handle("/api/v1/inventory/release", authMiddleware(http.HandlerFunc(inventoryHandler.ReleaseStock)))
+	mux.Handle("/api/v1/inventory/consume", authMiddleware(http.HandlerFunc(inventoryHandler.ConsumeStock)))
+	mux.Handle("/api/v1/inventory", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			inventoryHandler.ListInventories(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})))
+
 	// 管理员专用API路由（需要管理员权限）
 	adminMiddleware := mw.RequireAdmin(lg)
+
+	// 用户管理
 	mux.Handle("/api/v1/admin/users", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.ListUsers))))
 	mux.Handle("/api/v1/admin/users/role", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.UpdateUserRole))))
 	mux.Handle("/api/v1/admin/users/status", authMiddleware(adminMiddleware(http.HandlerFunc(userHandler.UpdateUserStatus))))
+
+	// 商品管理
+	mux.Handle("/api/v1/admin/products", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			productHandler.CreateProduct(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))))
+	mux.Handle("/api/v1/admin/products/", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/inventory/adjust") {
+			inventoryHandler.AdjustStock(w, r)
+		} else {
+			switch r.Method {
+			case http.MethodPut:
+				productHandler.UpdateProduct(w, r)
+			case http.MethodDelete:
+				productHandler.DeleteProduct(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		}
+	}))))
+	mux.Handle("/api/v1/admin/products/stats", authMiddleware(adminMiddleware(http.HandlerFunc(productHandler.GetProductStats))))
+
+	// 库存管理
+	mux.Handle("/api/v1/admin/inventory", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			inventoryHandler.CreateInventory(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))))
+	mux.Handle("/api/v1/admin/inventory/", authMiddleware(adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			inventoryHandler.GetInventory(w, r)
+		case http.MethodPut:
+			inventoryHandler.UpdateInventory(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))))
+	mux.Handle("/api/v1/admin/inventory/alerts/low-stock", authMiddleware(adminMiddleware(http.HandlerFunc(inventoryHandler.GetLowStockAlerts))))
+	mux.Handle("/api/v1/admin/inventory/stats", authMiddleware(adminMiddleware(http.HandlerFunc(inventoryHandler.GetInventoryStats))))
 
 	// 构建中间件链：请求进入时执行顺序为 access log → CORS → timeout → recovery → request ID
 	// 响应返回时执行顺序为 request ID → recovery → timeout → CORS → access log
