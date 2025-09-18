@@ -43,7 +43,8 @@ func main() {
 		resp.OK(w, &data, reqID, "")
 	})
 
-	// Build middleware chain: request ID -> recovery -> timeout -> CORS -> access log
+	// 构建中间件链：请求进入时执行顺序为 access log → CORS → timeout → recovery → request ID
+	// 响应返回时执行顺序为 request ID → recovery → timeout → CORS → access log
 	handler := mw.RequestID(mux)
 	handler = mw.Recovery(lg)(handler)
 	handler = mw.Timeout(cfg.App.RequestTimeout)(handler)
