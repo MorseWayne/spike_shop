@@ -1,12 +1,129 @@
-# API 使用示例
+# API 文档与使用示例
 
-本文档展示了商品与库存管理API的使用示例。
+本文档展示了商品与库存管理API的完整路由结构和使用示例。
 
-## 前置条件
+## 🗺️ API 路由结构概览
+
+我们的 API 采用 RESTful 设计风格，使用 Gin 框架实现。以下是完整的路由树：
+
+```
+Base URL: http://localhost:8080
+
+/healthz                                    # 健康检查 (GET)
+
+/api/v1/
+├── auth/                                   # 🔐 用户认证 (公开)
+│   ├── POST   /register                    # 用户注册
+│   ├── POST   /login                       # 用户登录
+│   └── POST   /refresh                     # 刷新令牌
+│
+├── users/                                  # 👤 用户管理 (需认证)
+│   └── GET    /profile                     # 获取用户信息
+│
+├── products/                               # 📦 商品管理 (公开)
+│   ├── GET    /                            # 获取商品列表
+│   ├── GET    /search                      # 搜索商品
+│   ├── GET    /with-inventory             # 获取带库存的商品列表
+│   ├── GET    /:id                        # 获取商品详情
+│   ├── GET    /:id/inventory              # 获取商品库存
+│   └── GET    /:id/inventory/check        # 检查库存可用性
+│
+├── inventory/                              # 📋 库存操作 (需认证)
+│   ├── GET    /                           # 获取库存列表
+│   ├── POST   /reserve                    # 预留库存
+│   ├── POST   /release                    # 释放库存
+│   └── POST   /consume                    # 消费库存
+│
+└── admin/                                  # 🛡️ 管理员专用 (需认证+管理员权限)
+    ├── users/                              # 用户管理
+    │   ├── GET    /                        # 获取用户列表
+    │   ├── PUT    /role                    # 更新用户角色
+    │   └── PUT    /status                  # 更新用户状态
+    │
+    ├── products/                           # 商品管理
+    │   ├── POST   /                        # 创建商品
+    │   ├── PUT    /:id                     # 更新商品
+    │   ├── DELETE /:id                     # 删除商品
+    │   ├── GET    /stats                   # 获取商品统计
+    │   └── POST   /:id/inventory/adjust    # 调整库存
+    │
+    └── inventory/                          # 库存管理
+        ├── POST   /                        # 创建库存记录
+        ├── GET    /:id                     # 获取库存详情
+        ├── PUT    /:id                     # 更新库存记录
+        ├── GET    /alerts/low-stock        # 获取低库存警告
+        └── GET    /stats                   # 获取库存统计
+```
+
+## 🔑 权限说明
+
+| 权限级别 | 说明 | 标识 |
+|---------|------|------|
+| 🌍 公开 | 无需认证，任何人都可访问 | 无标识 |
+| 🔐 需认证 | 需要有效的 JWT 令牌 | `Authorization: Bearer <token>` |
+| 🛡️ 管理员 | 需要认证 + 管理员角色 | 认证 + `role: admin` |
+
+## 📝 HTTP 方法说明
+
+| 方法 | 用途 | 示例 |
+|------|------|------|
+| `GET` | 获取资源 | 查询商品列表、获取用户信息 |
+| `POST` | 创建资源或执行操作 | 创建商品、预留库存 |
+| `PUT` | 更新资源 | 更新商品信息、修改用户角色 |
+| `DELETE` | 删除资源 | 删除商品 |
+
+## 🚀 快速开始
+
+### 前置条件
 
 1. 启动服务：`./spike-server`
 2. 确保数据库迁移已执行
 3. 获取管理员JWT令牌（通过用户认证API）
+
+### 基本使用流程
+
+1. **用户注册/登录** → 获取 JWT 令牌
+2. **浏览商品** → 公开 API，无需认证
+3. **库存操作** → 需要用户认证
+4. **管理功能** → 需要管理员权限
+
+## 🏗️ 技术架构
+
+### 路由框架：Gin
+- **高性能**：基于 httprouter，性能极优
+- **中间件支持**：内置 Recovery、Logger、CORS 等
+- **路由组**：支持路由分组和嵌套中间件
+- **参数绑定**：自动解析 URL 参数和请求体
+
+### 路由组织结构
+```go
+// 路由组示例
+v1 := engine.Group("/api/v1")
+{
+    // 认证路由组
+    auth := v1.Group("/auth")
+    {
+        auth.POST("/register", registerHandler)
+        auth.POST("/login", loginHandler)
+    }
+    
+    // 需要认证的路由组
+    protected := v1.Group("/users")
+    protected.Use(authMiddleware())
+    {
+        protected.GET("/profile", profileHandler)
+    }
+}
+```
+
+### 中间件链
+1. **Recovery** - Panic 恢复
+2. **Logger** - 访问日志
+3. **CORS** - 跨域支持
+4. **Auth** - JWT 认证（特定路由）
+5. **Admin** - 管理员权限（管理路由）
+
+## 📋 API 详细示例
 
 ## 商品管理 API
 
@@ -276,3 +393,38 @@ CACHE_ENABLED=false
 3. **索引优化**：已为常用查询字段添加索引
 4. **缓存策略**：读多写少的数据启用缓存
 5. **乐观锁**：库存更新使用版本号防止并发冲突
+
+## 🔧 开发工具
+
+### 路由调试
+Gin 框架提供了路由调试功能，启动时会打印所有注册的路由：
+
+```
+[GIN-debug] POST   /api/v1/auth/register     --> handler
+[GIN-debug] POST   /api/v1/auth/login        --> handler
+[GIN-debug] GET    /api/v1/products          --> handler
+[GIN-debug] GET    /api/v1/products/:id      --> handler
+...
+```
+
+### API 测试工具推荐
+1. **Postman** - 图形化 API 测试工具
+2. **Insomnia** - 轻量级 REST 客户端
+3. **curl** - 命令行工具（本文档示例）
+4. **httpie** - 用户友好的命令行工具
+
+### 环境切换
+```bash
+# 开发环境 - 显示详细路由信息
+APP_ENV=dev ./spike-server
+
+# 生产环境 - 静默模式
+APP_ENV=prod ./spike-server
+```
+
+## 📚 相关文档
+
+- [项目初始化文档](./trace/01_milestone_0_project_initialization.md)
+- [用户认证文档](./trace/03_milestone_2_user_authentication.md)
+- [数据库迁移文档](../migrations/)
+- [配置文件说明](../internal/config/)
