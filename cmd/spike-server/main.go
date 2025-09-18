@@ -1,15 +1,24 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
-	"os"
+
+	"github.com/MorseWayne/spike_shop/internal/config"
+	"github.com/MorseWayne/spike_shop/internal/logger"
 )
 
 func main() {
-	port := os.Getenv("APP_PORT")
-	if port == "" {
-		port = "8080"
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
+
+	// init logger
+	lg, err := logger.New(cfg.App.Env, cfg.Log.Level, cfg.Log.Encoding, cfg.App.Name, cfg.App.Version)
+	if err != nil {
+		log.Fatalf("init logger: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -19,9 +28,9 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	addr := ":" + port
-	log.Printf("spike-server starting on %s", addr)
+	addr := fmt.Sprintf(":%d", cfg.App.Port)
+	lg.Sugar().Infow("server starting", "addr", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server error: %v", err)
+		lg.Sugar().Fatalw("server error", "err", err)
 	}
 }
