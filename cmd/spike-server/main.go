@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/MorseWayne/spike_shop/internal/config"
@@ -53,7 +56,30 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.App.Port)
 	lg.Sugar().Infow("server starting", "addr", addr)
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		lg.Sugar().Fatalw("server error", "err", err)
+
+	// 启动服务器（异步）
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- srv.ListenAndServe()
+	}()
+
+	// 等待退出信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+	select {
+	case err := <-serverErrCh:
+		if err != nil && err != http.ErrServerClosed {
+			lg.Sugar().Fatalw("server error", "err", err)
+		}
+	case <-quit:
+		lg.Sugar().Infow("shutdown signal received")
 	}
+
+	// 优雅关闭
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.App.ShutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		lg.Sugar().Errorw("server shutdown error", "err", err)
+	}
+	lg.Sugar().Infow("server exited")
 }
