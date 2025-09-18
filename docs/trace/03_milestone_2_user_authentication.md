@@ -39,29 +39,52 @@
 
 ### 第一步：数据库迁移与用户表
 
-#### 1.1 创建迁移工具
+#### 1.1 迁移系统重构
 **文件**：`internal/database/database.go`
 
 **核心功能**：
 - 数据库连接管理
-- 迁移执行引擎
-- 迁移历史追踪
+- 基于 go-migrate 的迁移执行引擎
+- 双向迁移支持（up/down）
+- 脏状态检测与恢复
 
-**关键特性**：
+**迁移管理特性**：
 ```go
-// 迁移表自动创建
-CREATE TABLE IF NOT EXISTS migrations (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    filename VARCHAR(255) NOT NULL UNIQUE,
-    executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+// 使用 go-migrate 库管理数据库版本
+// schema_migrations 表自动创建
+CREATE TABLE schema_migrations (
+    version bigint NOT NULL PRIMARY KEY,
+    dirty boolean NOT NULL
+);
+
+// 新增功能
+func (db *DB) RunMigrations(migrationsDir string) error         // 执行所有迁移
+func (db *DB) MigrateDown(migrationsDir string, steps int) error // 回滚迁移
+func (db *DB) MigrateToVersion(migrationsDir string, version uint) error // 迁移到指定版本
+func (db *DB) ForceMigrationVersion(migrationsDir string, version uint) error // 强制清理脏状态
+```
+
+**命令行工具**：
+```bash
+# 执行所有迁移
+./migrate -action=up
+
+# 回滚1个迁移
+./migrate -action=down -steps=1
+
+# 迁移到指定版本
+./migrate -action=version -target=2
+
+# 强制清理脏状态
+./migrate -action=force -target=0
 ```
 
 #### 1.2 用户表设计
-**文件**：`migrations/20250918_001_create_users_table.sql`
+**文件**：`migrations/000001_create_users_table.up.sql` 和 `migrations/000001_create_users_table.down.sql`
 
-**表结构**：
+**Up 迁移文件结构**：
 ```sql
+-- 000001_create_users_table.up.sql
 CREATE TABLE IF NOT EXISTS `users` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '用户ID',
   `username` varchar(64) NOT NULL COMMENT '用户名，唯一',
@@ -79,12 +102,36 @@ CREATE TABLE IF NOT EXISTS `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 ```
 
+**Down 迁移文件**：
+```sql
+-- 000001_create_users_table.down.sql
+DROP TABLE IF EXISTS `users`;
+```
+
+**迁移文件结构**：
+```
+migrations/
+├── 000001_create_users_table.up.sql      # 创建用户表
+├── 000001_create_users_table.down.sql    # 删除用户表
+├── 000002_insert_admin_user.up.sql       # 插入默认管理员
+├── 000002_insert_admin_user.down.sql     # 删除默认管理员
+├── 000003_create_products_table.up.sql   # 创建商品表
+├── 000003_create_products_table.down.sql # 删除商品表
+└── 000004_create_inventory_table.up.sql  # 创建库存表
+```
+
 **设计考虑**：
 - 使用`bigint unsigned`作为主键，支持大量用户
 - 用户名和邮箱都有唯一约束
 - 角色使用枚举类型，确保数据一致性
 - 软删除通过`is_active`字段实现
 - 自动维护创建和更新时间戳
+
+**迁移优势**：
+- **双向迁移**: 支持回滚到任意版本
+- **原子性**: 每个迁移文件一个逻辑单元
+- **状态管理**: 自动检测脏状态并提供修复机制
+- **版本控制**: 精确的版本管理和冲突检测
 
 #### 1.3 配置扩展
 **文件**：`internal/config/config.go`
@@ -104,7 +151,7 @@ JWT struct {
     RefreshTokenTTL time.Duration
 }
 Migrations struct {
-    Dir string
+    Dir string  // go-migrate 迁移文件目录
 }
 ```
 
@@ -566,6 +613,14 @@ LOG_ENCODING=json
 - [ ] 账户锁定机制
 - [ ] 登录历史记录
 
+### 迁移系统增强
+- [x] 使用 go-migrate 替换自定义迁移实现
+- [x] 支持双向迁移（up/down）
+- [x] 脏状态检测与强制清理功能
+- [x] 命令行迁移管理工具
+- [ ] 迁移自动化测试
+- [ ] 数据迁移验证机制
+
 ### 性能优化
 - [ ] Redis令牌黑名单
 - [ ] 令牌缓存机制
@@ -582,7 +637,7 @@ LOG_ENCODING=json
 
 里程碑2成功实现了完整的用户认证与授权系统，包括：
 
-✅ **数据库层**：用户表设计与迁移管理  
+✅ **数据库层**：用户表设计与 go-migrate 迁移系统  
 ✅ **服务层**：用户注册/登录业务逻辑  
 ✅ **安全层**：JWT令牌管理与密码哈希  
 ✅ **权限层**：RBAC角色控制  
