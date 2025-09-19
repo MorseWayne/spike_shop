@@ -35,9 +35,9 @@ type SpikeEvent struct {
 // IsActive 判断秒杀活动是否正在进行
 func (s *SpikeEvent) IsActive() bool {
 	now := time.Now()
-	return s.Status == SpikeEventStatusActive && 
-		   now.After(s.StartAt) && 
-		   now.Before(s.EndAt)
+	return s.Status == SpikeEventStatusActive &&
+		now.After(s.StartAt) &&
+		now.Before(s.EndAt)
 }
 
 // IsAvailable 判断秒杀活动是否可参与（有库存且活动中）
@@ -69,8 +69,8 @@ func (s *SpikeEvent) CanStart() bool {
 
 // CanEnd 判断活动是否可以结束
 func (s *SpikeEvent) CanEnd() bool {
-	return s.Status == SpikeEventStatusActive && 
-		   (time.Now().After(s.EndAt) || s.SoldCount >= s.SpikeStock)
+	return s.Status == SpikeEventStatusActive &&
+		(time.Now().After(s.EndAt) || s.SoldCount >= s.SpikeStock)
 }
 
 // CreateSpikeEventRequest 表示创建秒杀活动请求
