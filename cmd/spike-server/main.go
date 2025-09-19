@@ -9,13 +9,17 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/MorseWayne/spike_shop/internal/api"
 	"github.com/MorseWayne/spike_shop/internal/cache"
 	"github.com/MorseWayne/spike_shop/internal/config"
 	"github.com/MorseWayne/spike_shop/internal/database"
+	"github.com/MorseWayne/spike_shop/internal/limiter"
 	"github.com/MorseWayne/spike_shop/internal/logger"
+	"github.com/MorseWayne/spike_shop/internal/mq"
 	"github.com/MorseWayne/spike_shop/internal/repo"
 	"github.com/MorseWayne/spike_shop/internal/router"
 	"github.com/MorseWayne/spike_shop/internal/service"
@@ -119,11 +123,136 @@ func initDependencies(cfg *config.Config, db *database.DB, cacheInstance cache.C
 	productHandler := api.NewProductHandler(productService, lg)
 	inventoryHandler := api.NewInventoryHandler(inventoryService, lg)
 
+	// 秒杀相关组件初始化
+	var spikeHandler *api.SpikeHandler
+	var spikeRoutesConfig *router.SpikeRoutesConfig
+
+	// 检查是否启用了秒杀功能（基于Redis缓存是否可用）
+	if cfg.Cache.Enabled && cfg.Cache.Type == "redis" {
+		// 创建Redis连接用于秒杀功能
+		redisAddr := fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
+		redisClient := redis.NewClient(&redis.Options{
+			Addr:     redisAddr,
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+		})
+
+		// 测试Redis连接
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			lg.Sugar().Warnw("failed to connect to Redis for spike features", "error", err)
+			redisClient.Close()
+		} else {
+			// 初始化秒杀缓存
+			spikeCache := cache.NewSpikeCache(redisClient)
+
+			// 初始化限流器配置
+			globalLimiterConfig := &limiter.Config{
+				Rate:      1000,
+				Window:    time.Minute,
+				Burst:     1000,
+				KeyPrefix: "limit:global",
+			}
+			userLimiterConfig := &limiter.Config{
+				Rate:      5,
+				Window:    time.Minute,
+				Burst:     10,
+				KeyPrefix: "limit:user",
+			}
+			apiLimiterConfig := &limiter.Config{
+				Rate:      100,
+				Window:    time.Minute,
+				Burst:     200,
+				KeyPrefix: "limit:api",
+			}
+
+			// 初始化限流器
+			globalLimiter, err := limiter.NewTokenBucketLimiter(redisClient, globalLimiterConfig)
+			if err != nil {
+				lg.Sugar().Warnw("failed to create global limiter", "error", err)
+				redisClient.Close()
+				return &router.Dependencies{
+					UserHandler:      userHandler,
+					ProductHandler:   productHandler,
+					InventoryHandler: inventoryHandler,
+					JWTService:       jwtService,
+				}
+			}
+
+			userLimiter, err := limiter.NewSlidingWindowLimiter(redisClient, userLimiterConfig)
+			if err != nil {
+				lg.Sugar().Warnw("failed to create user limiter", "error", err)
+				redisClient.Close()
+				return &router.Dependencies{
+					UserHandler:      userHandler,
+					ProductHandler:   productHandler,
+					InventoryHandler: inventoryHandler,
+					JWTService:       jwtService,
+				}
+			}
+
+			apiLimiter, err := limiter.NewFixedWindowLimiter(redisClient, apiLimiterConfig)
+			if err != nil {
+				lg.Sugar().Warnw("failed to create API limiter", "error", err)
+				redisClient.Close()
+				return &router.Dependencies{
+					UserHandler:      userHandler,
+					ProductHandler:   productHandler,
+					InventoryHandler: inventoryHandler,
+					JWTService:       jwtService,
+				}
+			}
+
+			// 初始化MQ组件（可选，如果配置了RabbitMQ）
+			var spikeProducer *mq.SpikeProducer
+			// TODO: 这里可以根据配置初始化RabbitMQ组件
+			// mqConfig := &mq.RabbitMQConfig{...}
+			// spikeProducer = mq.NewSpikeProducer(mqConfig, lg)
+
+			// 初始化秒杀仓储
+			spikeEventRepo := repo.NewSpikeEventRepository(db.DB)
+			spikeOrderRepo := repo.NewSpikeOrderRepository(db.DB)
+
+			// 初始化秒杀服务
+			spikeService := service.NewSpikeService(
+				spikeEventRepo,
+				spikeOrderRepo,
+				productRepo,
+				inventoryRepo,
+				userRepo,
+				spikeCache,
+				spikeProducer,
+				globalLimiter,
+				userLimiter,
+				service.DefaultSpikeServiceConfig(),
+				lg,
+			)
+
+			// 初始化秒杀处理器
+			spikeHandler = api.NewSpikeHandler(spikeService, lg)
+
+			// 配置秒杀路由（暂时使用空的中间件函数，后续完善）
+			spikeRoutesConfig = &router.SpikeRoutesConfig{
+				JWTMiddleware:   func(c *gin.Context) { c.Next() }, // TODO: 实现JWT认证中间件
+				AdminMiddleware: func(c *gin.Context) { c.Next() }, // TODO: 实现管理员权限中间件
+				SpikeLimiter:    globalLimiter,                     // 秒杀专用限流器
+				APILimiter:      apiLimiter,                        // API通用限流器
+			}
+
+			lg.Sugar().Infow("spike features initialized successfully")
+		}
+	} else {
+		lg.Sugar().Infow("spike features disabled - Redis cache required")
+	}
+
 	return &router.Dependencies{
-		UserHandler:      userHandler,
-		ProductHandler:   productHandler,
-		InventoryHandler: inventoryHandler,
-		JWTService:       jwtService,
+		UserHandler:       userHandler,
+		ProductHandler:    productHandler,
+		InventoryHandler:  inventoryHandler,
+		SpikeHandler:      spikeHandler,
+		JWTService:        jwtService,
+		SpikeRoutesConfig: spikeRoutesConfig,
 	}
 }
 

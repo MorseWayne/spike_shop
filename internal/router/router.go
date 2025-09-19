@@ -15,10 +15,12 @@ import (
 
 // Dependencies 包含路由设置所需的所有依赖
 type Dependencies struct {
-	UserHandler      *api.UserHandler
-	ProductHandler   *api.ProductHandler
-	InventoryHandler *api.InventoryHandler
-	JWTService       service.JWTService
+	UserHandler       *api.UserHandler
+	ProductHandler    *api.ProductHandler
+	InventoryHandler  *api.InventoryHandler
+	SpikeHandler      *api.SpikeHandler // 秒杀处理器
+	JWTService        service.JWTService
+	SpikeRoutesConfig *SpikeRoutesConfig // 秒杀路由配置
 }
 
 // Router 路由器接口
@@ -147,6 +149,11 @@ func (r *GinRouter) setupRoutes() {
 				adminInventory.GET("/alerts/low-stock", r.wrapHandler(r.deps.InventoryHandler.GetLowStockAlerts))
 				adminInventory.GET("/stats", r.wrapHandler(r.deps.InventoryHandler.GetInventoryStats))
 			}
+		}
+
+		// 秒杀路由
+		if r.deps.SpikeHandler != nil && r.deps.SpikeRoutesConfig != nil {
+			RegisterSpikeRoutesWithConfig(v1, r.deps.SpikeHandler, r.deps.SpikeRoutesConfig)
 		}
 	}
 }
