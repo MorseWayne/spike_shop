@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,14 +15,26 @@ import (
 	"github.com/MorseWayne/spike_shop/internal/service"
 )
 
+// SpikeServiceInterface 定义秒杀服务接口
+type SpikeServiceInterface interface {
+	ParticipateSpike(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error)
+	GetSpikeEventDetail(ctx context.Context, eventID int64) (*domain.SpikeEventWithProduct, error)
+	GetUserSpikeOrders(ctx context.Context, userID int64, req *domain.SpikeOrderListRequest) (*domain.SpikeOrderListResponse, error)
+	GetSpikeOrderDetail(ctx context.Context, orderID, userID int64) (*domain.SpikeOrderWithDetails, error)
+	CancelSpikeOrder(ctx context.Context, orderID, userID int64, req *domain.CancelSpikeOrderRequest) error
+	GetActiveEvents(ctx context.Context, req *domain.SpikeEventListRequest) (*domain.SpikeEventListResponse, error)
+	WarmupStock(ctx context.Context, eventID int64) error
+	GetSpikeStats(ctx context.Context, eventID int64) (*service.SpikeStats, error)
+}
+
 // SpikeHandler 秒杀API处理器
 type SpikeHandler struct {
-	spikeService *service.SpikeService
+	spikeService SpikeServiceInterface
 	logger       *zap.Logger
 }
 
 // NewSpikeHandler 创建秒杀API处理器
-func NewSpikeHandler(spikeService *service.SpikeService, logger *zap.Logger) *SpikeHandler {
+func NewSpikeHandler(spikeService SpikeServiceInterface, logger *zap.Logger) *SpikeHandler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

@@ -27,10 +27,7 @@ func (m *MockRedisClient) EvalSha(ctx context.Context, sha1 string, keys []strin
 	// 模拟令牌桶脚本逻辑
 	if len(args) >= 5 {
 		capacity := args[0].(string)
-		rate := args[1].(string)
-		window := args[2].(string)
 		tokensRequested := args[3].(string)
-		currentTime := args[4].(string)
 
 		// 简化逻辑：如果请求的令牌数 <= 容量，则允许
 		if tokensRequested == "1" && capacity == "10" {
@@ -162,9 +159,8 @@ func TestNewTokenBucketLimiter(t *testing.T) {
 			}
 
 			if !tt.wantErr && limiter != nil {
-				tokenBucket := limiter.(*TokenBucketLimiter)
-				if tokenBucket.keyPrefix != tt.wantPrefix {
-					t.Errorf("NewTokenBucketLimiter() keyPrefix = %v, want %v", tokenBucket.keyPrefix, tt.wantPrefix)
+				if limiter.keyPrefix != tt.wantPrefix {
+					t.Errorf("NewTokenBucketLimiter() keyPrefix = %v, want %v", limiter.keyPrefix, tt.wantPrefix)
 				}
 			}
 		})

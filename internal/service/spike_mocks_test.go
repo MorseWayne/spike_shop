@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/MorseWayne/spike_shop/internal/cache"
 	"github.com/MorseWayne/spike_shop/internal/domain"
 	"github.com/MorseWayne/spike_shop/internal/limiter"
 	"github.com/MorseWayne/spike_shop/internal/mq"
@@ -57,7 +57,7 @@ func (m *MockSpikeEventRepository) GetByIDWithTx(tx *sql.Tx, id int64) (*domain.
 	return m.GetByID(id)
 }
 
-func (m *MockSpikeEventRepository) UpdateSoldCount(id int64, soldCount int) error {
+func (m *MockSpikeEventRepository) UpdateSoldCount(id int64, soldCount int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -69,6 +69,13 @@ func (m *MockSpikeEventRepository) UpdateSoldCount(id int64, soldCount int) erro
 	event.SoldCount = soldCount
 	event.UpdatedAt = time.Now()
 	return nil
+}
+
+// Count 实现Repository接口要求的方法
+func (m *MockSpikeEventRepository) Count() (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return int64(len(m.events)), nil
 }
 
 func (m *MockSpikeEventRepository) List(req *domain.SpikeEventListRequest) ([]*domain.SpikeEvent, int64, error) {
@@ -127,6 +134,13 @@ func (m *MockSpikeOrderRepository) Create(order *domain.SpikeOrder) error {
 
 	m.orders[order.ID] = order
 	return nil
+}
+
+// Count 实现Repository接口要求的方法
+func (m *MockSpikeOrderRepository) Count() (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return int64(len(m.orders)), nil
 }
 
 func (m *MockSpikeOrderRepository) GetByID(id int64) (*domain.SpikeOrder, error) {
@@ -214,13 +228,51 @@ func (m *MockSpikeOrderRepository) CountByStatus(status domain.SpikeOrderStatus)
 	return count, nil
 }
 
+// StockDecrementResult 模拟库存扣减结果
+type StockDecrementResult struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	RemainingStock int64  `json:"remaining_stock"`
+}
+
+// StockRestoreResult 模拟库存恢复结果
+type StockRestoreResult struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	RemainingStock int64  `json:"remaining_stock"`
+}
+
+// StockInfo 模拟库存信息
+type StockInfo struct {
+	Stock   int64 `json:"stock"`
+	SoldOut bool  `json:"sold_out"`
+	Exists  bool  `json:"exists"`
+}
+
+// Helper函数
+func GetSpikeStockKey(eventID int64) string {
+	return fmt.Sprintf("spike:stock:%d", eventID)
+}
+
+func GetSpikeSoldOutKey(eventID int64) string {
+	return fmt.Sprintf("spike:sold_out:%d", eventID)
+}
+
+func GetSpikeUserKey(userID, eventID int64) string {
+	return fmt.Sprintf("spike:user:%d:%d", userID, eventID)
+}
+
+func GetSpikeEventKey(eventID int64) string {
+	return fmt.Sprintf("spike:event:%d", eventID)
+}
+
 // MockSpikeCache 秒杀缓存模拟
 type MockSpikeCache struct {
-	stockData     map[int64]int64 // eventID -> stock
-	soldOutData   map[int64]bool  // eventID -> soldOut
-	userMarkData  map[string]bool // userKey -> marked
+	stockData     map[int64]int64       // eventID -> stock
+	soldOutData   map[int64]bool        // eventID -> soldOut
+	userMarkData  map[string]bool       // userKey -> marked
 	eventData     map[int64]interface{} // eventID -> event data
-	processedData map[string]bool  // messageID -> processed
+	processedData map[string]bool       // messageID -> processed
 	mu            sync.RWMutex
 }
 
@@ -234,15 +286,15 @@ func NewMockSpikeCache() *MockSpikeCache {
 	}
 }
 
-func (m *MockSpikeCache) DecrementStock(ctx context.Context, eventID, userID, quantity int64, userTTL, stockTTL time.Duration) (*cache.StockDecrementResult, error) {
+func (m *MockSpikeCache) DecrementStock(ctx context.Context, eventID, userID, quantity int64, userTTL, stockTTL time.Duration) (*StockDecrementResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	userKey := cache.GetSpikeUserKey(userID, eventID)
+	userKey := GetSpikeUserKey(userID, eventID)
 
 	// 检查售罄标记
 	if m.soldOutData[eventID] {
-		return &cache.StockDecrementResult{
+		return &StockDecrementResult{
 			Success:        false,
 			Message:        "商品已售罄",
 			RemainingStock: 0,
@@ -251,7 +303,7 @@ func (m *MockSpikeCache) DecrementStock(ctx context.Context, eventID, userID, qu
 
 	// 检查用户去重
 	if m.userMarkData[userKey] {
-		return &cache.StockDecrementResult{
+		return &StockDecrementResult{
 			Success:        false,
 			Message:        "用户已参与该活动",
 			RemainingStock: m.stockData[eventID],
@@ -262,7 +314,7 @@ func (m *MockSpikeCache) DecrementStock(ctx context.Context, eventID, userID, qu
 	currentStock := m.stockData[eventID]
 	if currentStock < quantity {
 		m.soldOutData[eventID] = true
-		return &cache.StockDecrementResult{
+		return &StockDecrementResult{
 			Success:        false,
 			Message:        "库存不足",
 			RemainingStock: 0,
@@ -278,14 +330,14 @@ func (m *MockSpikeCache) DecrementStock(ctx context.Context, eventID, userID, qu
 		m.soldOutData[eventID] = true
 	}
 
-	return &cache.StockDecrementResult{
+	return &StockDecrementResult{
 		Success:        true,
 		Message:        "扣减成功",
 		RemainingStock: newStock,
 	}, nil
 }
 
-func (m *MockSpikeCache) RestoreStock(ctx context.Context, eventID, userID, quantity int64) (*cache.StockRestoreResult, error) {
+func (m *MockSpikeCache) RestoreStock(ctx context.Context, eventID, userID, quantity int64) (*StockRestoreResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -298,21 +350,21 @@ func (m *MockSpikeCache) RestoreStock(ctx context.Context, eventID, userID, quan
 		m.soldOutData[eventID] = false
 	}
 
-	userKey := cache.GetSpikeUserKey(userID, eventID)
+	userKey := GetSpikeUserKey(userID, eventID)
 	delete(m.userMarkData, userKey)
 
-	return &cache.StockRestoreResult{
+	return &StockRestoreResult{
 		Success:        true,
 		Message:        "库存恢复成功",
 		RemainingStock: newStock,
 	}, nil
 }
 
-func (m *MockSpikeCache) GetStockInfo(ctx context.Context, eventID int64) (*cache.StockInfo, error) {
+func (m *MockSpikeCache) GetStockInfo(ctx context.Context, eventID int64) (*StockInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	return &cache.StockInfo{
+	return &StockInfo{
 		Stock:   m.stockData[eventID],
 		SoldOut: m.soldOutData[eventID],
 		Exists:  true,
@@ -569,20 +621,34 @@ func (m *MockRedisClient) Close() error {
 }
 
 // 实现redis.Cmdable接口的其他必需方法（简化实现）
-func (m *MockRedisClient) Pipeline() redis.Pipeliner                                          { return nil }
-func (m *MockRedisClient) Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) { return nil, nil }
-func (m *MockRedisClient) TxPipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) { return nil, nil }
-func (m *MockRedisClient) TxPipeline() redis.Pipeliner                                       { return nil }
-func (m *MockRedisClient) Command(ctx context.Context) *redis.CommandsInfoCmd                { return nil }
-func (m *MockRedisClient) CommandList(ctx context.Context, filter *redis.FilterBy) *redis.StringSliceCmd { return nil }
-func (m *MockRedisClient) CommandGetKeys(ctx context.Context, commands ...interface{}) *redis.StringSliceCmd { return nil }
-func (m *MockRedisClient) CommandGetKeysAndFlags(ctx context.Context, commands ...interface{}) *redis.KeyFlagsCmd { return nil }
-func (m *MockRedisClient) ClientGetName(ctx context.Context) *redis.StringCmd               { return nil }
-func (m *MockRedisClient) Echo(ctx context.Context, message interface{}) *redis.StringCmd  { return nil }
-func (m *MockRedisClient) Hello(ctx context.Context, ver int, username, password, clientName string) *redis.MapStringInterfaceCmd { return nil }
-func (m *MockRedisClient) Select(ctx context.Context, index int) *redis.StatusCmd          { return nil }
-func (m *MockRedisClient) SwapDB(ctx context.Context, index1, index2 int) *redis.StatusCmd { return nil }
-func (m *MockRedisClient) ClientID(ctx context.Context) *redis.IntCmd                       { return nil }
+func (m *MockRedisClient) Pipeline() redis.Pipeliner { return nil }
+func (m *MockRedisClient) Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+	return nil, nil
+}
+func (m *MockRedisClient) TxPipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+	return nil, nil
+}
+func (m *MockRedisClient) TxPipeline() redis.Pipeliner                        { return nil }
+func (m *MockRedisClient) Command(ctx context.Context) *redis.CommandsInfoCmd { return nil }
+func (m *MockRedisClient) CommandList(ctx context.Context, filter *redis.FilterBy) *redis.StringSliceCmd {
+	return nil
+}
+func (m *MockRedisClient) CommandGetKeys(ctx context.Context, commands ...interface{}) *redis.StringSliceCmd {
+	return nil
+}
+func (m *MockRedisClient) CommandGetKeysAndFlags(ctx context.Context, commands ...interface{}) *redis.KeyFlagsCmd {
+	return nil
+}
+func (m *MockRedisClient) ClientGetName(ctx context.Context) *redis.StringCmd             { return nil }
+func (m *MockRedisClient) Echo(ctx context.Context, message interface{}) *redis.StringCmd { return nil }
+func (m *MockRedisClient) Hello(ctx context.Context, ver int, username, password, clientName string) *redis.MapStringInterfaceCmd {
+	return nil
+}
+func (m *MockRedisClient) Select(ctx context.Context, index int) *redis.StatusCmd { return nil }
+func (m *MockRedisClient) SwapDB(ctx context.Context, index1, index2 int) *redis.StatusCmd {
+	return nil
+}
+func (m *MockRedisClient) ClientID(ctx context.Context) *redis.IntCmd { return nil }
 
 // 其他必需方法的空实现...
 func (m *MockRedisClient) SetEX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd {
@@ -605,7 +671,15 @@ func (m *MockRedisClient) GetDel(ctx context.Context, key string) *redis.StringC
 // 更多方法的空实现，保持简单...
 func (m *MockRedisClient) Append(ctx context.Context, key, value string) *redis.IntCmd { return nil }
 func (m *MockRedisClient) Decr(ctx context.Context, key string) *redis.IntCmd          { return nil }
-func (m *MockRedisClient) DecrBy(ctx context.Context, key string, decrement int64) *redis.IntCmd { return nil }
-func (m *MockRedisClient) Incr(ctx context.Context, key string) *redis.IntCmd          { return redis.NewIntCmd(ctx, "incr", key) }
-func (m *MockRedisClient) IncrBy(ctx context.Context, key string, value int64) *redis.IntCmd { return redis.NewIntCmd(ctx, "incrby", key, value) }
-func (m *MockRedisClient) IncrByFloat(ctx context.Context, key string, value float64) *redis.FloatCmd { return nil }
+func (m *MockRedisClient) DecrBy(ctx context.Context, key string, decrement int64) *redis.IntCmd {
+	return nil
+}
+func (m *MockRedisClient) Incr(ctx context.Context, key string) *redis.IntCmd {
+	return redis.NewIntCmd(ctx, "incr", key)
+}
+func (m *MockRedisClient) IncrBy(ctx context.Context, key string, value int64) *redis.IntCmd {
+	return redis.NewIntCmd(ctx, "incrby", key, value)
+}
+func (m *MockRedisClient) IncrByFloat(ctx context.Context, key string, value float64) *redis.FloatCmd {
+	return nil
+}

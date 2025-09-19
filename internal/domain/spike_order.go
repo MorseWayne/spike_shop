@@ -2,7 +2,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
+)
+
+// 常用错误
+var (
+	ErrSpikeOrderNotFound = errors.New("秒杀订单不存在")
 )
 
 // SpikeOrderStatus 定义秒杀订单状态类型

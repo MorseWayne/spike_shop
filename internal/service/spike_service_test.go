@@ -27,8 +27,8 @@ func TestSpikeService_ParticipateSpike(t *testing.T) {
 	user := &domain.User{
 		Username: "testuser",
 		Email:    "test@example.com",
-		Role:     domain.UserRoleCustomer,
-		Status:   domain.UserStatusActive,
+		Role:     domain.UserRoleUser,
+		IsActive: true,
 	}
 	userRepo.Create(user)
 
@@ -55,21 +55,20 @@ func TestSpikeService_ParticipateSpike(t *testing.T) {
 	// 创建测试秒杀活动
 	now := time.Now()
 	spikeEvent := &domain.SpikeEvent{
-		ProductID:      product.ID,
-		Title:          "Test Spike Event",
-		StartTime:      now.Add(-time.Hour), // 1小时前开始
-		EndTime:        now.Add(time.Hour),  // 1小时后结束
-		OriginalPrice:  100.0,
-		SpikePrice:     50.0,
-		TotalStock:     100,
-		AvailableStock: 100,
-		SoldCount:      0,
-		Status:         domain.SpikeEventStatusActive,
+		ProductID:     product.ID,
+		Name:          "Test Spike Event",
+		StartAt:       now.Add(-time.Hour), // 1小时前开始
+		EndAt:         now.Add(time.Hour),  // 1小时后结束
+		OriginalPrice: 100.0,
+		SpikePrice:    50.0,
+		SpikeStock:    100,
+		SoldCount:     0,
+		Status:        domain.SpikeEventStatusActive,
 	}
 	spikeEventRepo.Create(spikeEvent)
 
 	// 预热缓存库存
-	spikeCache.WarmupStock(context.Background(), spikeEvent.ID, int64(spikeEvent.AvailableStock), time.Hour)
+	spikeCache.WarmupStock(context.Background(), spikeEvent.ID, spikeEvent.GetRemainingStock(), time.Hour)
 
 	// 创建服务
 	service := NewSpikeService(
@@ -245,16 +244,15 @@ func TestSpikeService_GetSpikeEventDetail(t *testing.T) {
 	// 创建测试秒杀活动
 	now := time.Now()
 	spikeEvent := &domain.SpikeEvent{
-		ProductID:      product.ID,
-		Title:          "Test Spike Event",
-		StartTime:      now.Add(-time.Hour),
-		EndTime:        now.Add(time.Hour),
-		OriginalPrice:  100.0,
-		SpikePrice:     50.0,
-		TotalStock:     100,
-		AvailableStock: 90,
-		SoldCount:      10,
-		Status:         domain.SpikeEventStatusActive,
+		ProductID:     product.ID,
+		Name:          "Test Spike Event",
+		StartAt:       now.Add(-time.Hour),
+		EndAt:         now.Add(time.Hour),
+		OriginalPrice: 100.0,
+		SpikePrice:    50.0,
+		SpikeStock:    100,
+		SoldCount:     10,
+		Status:        domain.SpikeEventStatusActive,
 	}
 	spikeEventRepo.Create(spikeEvent)
 
@@ -306,8 +304,8 @@ func TestSpikeService_GetSpikeEventDetail(t *testing.T) {
 			}
 
 			if !tt.wantErr && result != nil {
-				if result.SpikeEvent.AvailableStock != int(tt.wantStock) {
-					t.Errorf("GetSpikeEventDetail() stock = %d, want %d", result.SpikeEvent.AvailableStock, tt.wantStock)
+				if result.SpikeEvent.GetRemainingStock() != tt.wantStock {
+					t.Errorf("GetSpikeEventDetail() stock = %d, want %d", result.SpikeEvent.GetRemainingStock(), tt.wantStock)
 				}
 				if result.Product == nil {
 					t.Errorf("GetSpikeEventDetail() product should not be nil")
@@ -327,31 +325,29 @@ func TestSpikeService_GetActiveEvents(t *testing.T) {
 
 	// 活跃活动
 	activeEvent := &domain.SpikeEvent{
-		ProductID:      1,
-		Title:          "Active Event",
-		StartTime:      now.Add(-time.Hour),
-		EndTime:        now.Add(time.Hour),
-		OriginalPrice:  100.0,
-		SpikePrice:     50.0,
-		TotalStock:     100,
-		AvailableStock: 80,
-		SoldCount:      20,
-		Status:         domain.SpikeEventStatusActive,
+		ProductID:     1,
+		Name:          "Active Event",
+		StartAt:       now.Add(-time.Hour),
+		EndAt:         now.Add(time.Hour),
+		OriginalPrice: 100.0,
+		SpikePrice:    50.0,
+		SpikeStock:    100,
+		SoldCount:     20,
+		Status:        domain.SpikeEventStatusActive,
 	}
 	spikeEventRepo.Create(activeEvent)
 
 	// 未开始活动
 	pendingEvent := &domain.SpikeEvent{
-		ProductID:      2,
-		Title:          "Pending Event",
-		StartTime:      now.Add(time.Hour),
-		EndTime:        now.Add(2 * time.Hour),
-		OriginalPrice:  200.0,
-		SpikePrice:     100.0,
-		TotalStock:     50,
-		AvailableStock: 50,
-		SoldCount:      0,
-		Status:         domain.SpikeEventStatusPending,
+		ProductID:     2,
+		Name:          "Pending Event",
+		StartAt:       now.Add(time.Hour),
+		EndAt:         now.Add(2 * time.Hour),
+		OriginalPrice: 200.0,
+		SpikePrice:    100.0,
+		SpikeStock:    50,
+		SoldCount:     0,
+		Status:        domain.SpikeEventStatusPending,
 	}
 	spikeEventRepo.Create(pendingEvent)
 
@@ -401,16 +397,15 @@ func TestSpikeService_CancelSpikeOrder(t *testing.T) {
 
 	// 创建测试秒杀活动
 	spikeEvent := &domain.SpikeEvent{
-		ProductID:      1,
-		Title:          "Test Event",
-		StartTime:      time.Now().Add(-time.Hour),
-		EndTime:        time.Now().Add(time.Hour),
-		OriginalPrice:  100.0,
-		SpikePrice:     50.0,
-		TotalStock:     100,
-		AvailableStock: 80,
-		SoldCount:      20,
-		Status:         domain.SpikeEventStatusActive,
+		ProductID:     1,
+		Name:          "Test Event",
+		StartAt:       time.Now().Add(-time.Hour),
+		EndAt:         time.Now().Add(time.Hour),
+		OriginalPrice: 100.0,
+		SpikePrice:    50.0,
+		SpikeStock:    100,
+		SoldCount:     20,
+		Status:        domain.SpikeEventStatusActive,
 	}
 	spikeEventRepo.Create(spikeEvent)
 
@@ -418,7 +413,6 @@ func TestSpikeService_CancelSpikeOrder(t *testing.T) {
 	spikeOrder := &domain.SpikeOrder{
 		SpikeEventID:   spikeEvent.ID,
 		UserID:         1,
-		ProductID:      1,
 		Quantity:       1,
 		SpikePrice:     50.0,
 		TotalAmount:    50.0,
@@ -507,16 +501,15 @@ func TestSpikeService_GetSpikeStats(t *testing.T) {
 
 	// 创建测试活动
 	spikeEvent := &domain.SpikeEvent{
-		ProductID:      1,
-		Title:          "Test Event",
-		StartTime:      time.Now().Add(-time.Hour),
-		EndTime:        time.Now().Add(time.Hour),
-		OriginalPrice:  100.0,
-		SpikePrice:     50.0,
-		TotalStock:     100,
-		AvailableStock: 70,
-		SoldCount:      30,
-		Status:         domain.SpikeEventStatusActive,
+		ProductID:     1,
+		Name:          "Test Event",
+		StartAt:       time.Now().Add(-time.Hour),
+		EndAt:         time.Now().Add(time.Hour),
+		OriginalPrice: 100.0,
+		SpikePrice:    50.0,
+		SpikeStock:    100,
+		SoldCount:     30,
+		Status:        domain.SpikeEventStatusActive,
 	}
 	spikeEventRepo.Create(spikeEvent)
 
@@ -565,8 +558,8 @@ func TestSpikeService_GetSpikeStats(t *testing.T) {
 		t.Errorf("GetSpikeStats() event ID = %d, want %d", stats.EventID, spikeEvent.ID)
 	}
 
-	if stats.TotalStock != int64(spikeEvent.TotalStock) {
-		t.Errorf("GetSpikeStats() total stock = %d, want %d", stats.TotalStock, spikeEvent.TotalStock)
+	if stats.TotalStock != spikeEvent.SpikeStock {
+		t.Errorf("GetSpikeStats() total stock = %d, want %d", stats.TotalStock, spikeEvent.SpikeStock)
 	}
 
 	// 应该使用缓存中的库存数据
@@ -595,16 +588,15 @@ func TestSpikeService_WarmupStock(t *testing.T) {
 
 	// 创建测试活动
 	spikeEvent := &domain.SpikeEvent{
-		ProductID:      1,
-		Title:          "Test Event",
-		StartTime:      time.Now().Add(time.Hour),
-		EndTime:        time.Now().Add(2 * time.Hour),
-		OriginalPrice:  100.0,
-		SpikePrice:     50.0,
-		TotalStock:     100,
-		AvailableStock: 90,
-		SoldCount:      10,
-		Status:         domain.SpikeEventStatusPending,
+		ProductID:     1,
+		Name:          "Test Event",
+		StartAt:       time.Now().Add(time.Hour),
+		EndAt:         time.Now().Add(2 * time.Hour),
+		OriginalPrice: 100.0,
+		SpikePrice:    50.0,
+		SpikeStock:    100,
+		SoldCount:     10,
+		Status:        domain.SpikeEventStatusPending,
 	}
 	spikeEventRepo.Create(spikeEvent)
 
@@ -633,7 +625,7 @@ func TestSpikeService_WarmupStock(t *testing.T) {
 		t.Errorf("GetStockInfo() unexpected error = %v", err)
 	}
 
-	expectedStock := int64(spikeEvent.AvailableStock)
+	expectedStock := spikeEvent.GetRemainingStock()
 	if stockInfo.Stock != expectedStock {
 		t.Errorf("WarmupStock() cached stock = %d, want %d", stockInfo.Stock, expectedStock)
 	}
@@ -660,8 +652,8 @@ func TestSpikeService_ConcurrentParticipation(t *testing.T) {
 	user := &domain.User{
 		Username: "testuser",
 		Email:    "test@example.com",
-		Role:     domain.UserRoleCustomer,
-		Status:   domain.UserStatusActive,
+		Role:     domain.UserRoleUser,
+		IsActive: true,
 	}
 	userRepo.Create(user)
 
@@ -673,16 +665,15 @@ func TestSpikeService_ConcurrentParticipation(t *testing.T) {
 	productRepo.Create(product)
 
 	spikeEvent := &domain.SpikeEvent{
-		ProductID:      product.ID,
-		Title:          "Test Event",
-		StartTime:      time.Now().Add(-time.Hour),
-		EndTime:        time.Now().Add(time.Hour),
-		OriginalPrice:  100.0,
-		SpikePrice:     50.0,
-		TotalStock:     10, // 少量库存
-		AvailableStock: 10,
-		SoldCount:      0,
-		Status:         domain.SpikeEventStatusActive,
+		ProductID:     product.ID,
+		Name:          "Test Event",
+		StartAt:       time.Now().Add(-time.Hour),
+		EndAt:         time.Now().Add(time.Hour),
+		OriginalPrice: 100.0,
+		SpikePrice:    50.0,
+		SpikeStock:    10, // 少量库存
+		SoldCount:     0,
+		Status:        domain.SpikeEventStatusActive,
 	}
 	spikeEventRepo.Create(spikeEvent)
 
@@ -709,8 +700,8 @@ func TestSpikeService_ConcurrentParticipation(t *testing.T) {
 		user := &domain.User{
 			Username: "user" + string(rune('0'+i)),
 			Email:    "user" + string(rune('0'+i)) + "@example.com",
-			Role:     domain.UserRoleCustomer,
-			Status:   domain.UserStatusActive,
+			Role:     domain.UserRoleUser,
+			IsActive: true,
 		}
 		userRepo.Create(user)
 		users[i] = user

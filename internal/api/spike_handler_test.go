@@ -18,14 +18,14 @@ import (
 
 // MockSpikeService for testing
 type MockSpikeService struct {
-	participateFunc      func(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error)
-	getEventDetailFunc   func(ctx context.Context, eventID int64) (*domain.SpikeEventWithProduct, error)
-	getActiveEventsFunc  func(ctx context.Context, req *domain.SpikeEventListRequest) (*domain.SpikeEventListResponse, error)
-	getUserOrdersFunc    func(ctx context.Context, userID int64, req *domain.SpikeOrderListRequest) (*domain.SpikeOrderListResponse, error)
-	getOrderDetailFunc   func(ctx context.Context, orderID, userID int64) (*domain.SpikeOrderWithDetails, error)
-	cancelOrderFunc      func(ctx context.Context, orderID, userID int64, req *domain.CancelSpikeOrderRequest) error
-	getSpikeStatsFunc    func(ctx context.Context, eventID int64) (*service.SpikeStats, error)
-	warmupStockFunc      func(ctx context.Context, eventID int64) error
+	participateFunc     func(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error)
+	getEventDetailFunc  func(ctx context.Context, eventID int64) (*domain.SpikeEventWithProduct, error)
+	getActiveEventsFunc func(ctx context.Context, req *domain.SpikeEventListRequest) (*domain.SpikeEventListResponse, error)
+	getUserOrdersFunc   func(ctx context.Context, userID int64, req *domain.SpikeOrderListRequest) (*domain.SpikeOrderListResponse, error)
+	getOrderDetailFunc  func(ctx context.Context, orderID, userID int64) (*domain.SpikeOrderWithDetails, error)
+	cancelOrderFunc     func(ctx context.Context, orderID, userID int64, req *domain.CancelSpikeOrderRequest) error
+	getSpikeStatsFunc   func(ctx context.Context, eventID int64) (*service.SpikeStats, error)
+	warmupStockFunc     func(ctx context.Context, eventID int64) error
 }
 
 func (m *MockSpikeService) ParticipateSpike(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error) {
@@ -40,7 +40,7 @@ func (m *MockSpikeService) GetSpikeEventDetail(ctx context.Context, eventID int6
 		return m.getEventDetailFunc(ctx, eventID)
 	}
 	return &domain.SpikeEventWithProduct{
-		SpikeEvent: &domain.SpikeEvent{ID: eventID, Title: "Test Event"},
+		SpikeEvent: &domain.SpikeEvent{ID: eventID, Name: "Test Event"},
 		Product:    &domain.Product{ID: 1, Name: "Test Product"},
 	}, nil
 }
@@ -51,11 +51,11 @@ func (m *MockSpikeService) GetActiveEvents(ctx context.Context, req *domain.Spik
 	}
 	return &domain.SpikeEventListResponse{
 		Events: []*domain.SpikeEvent{
-			{ID: 1, Title: "Test Event 1"},
-			{ID: 2, Title: "Test Event 2"},
+			{ID: 1, Name: "Test Event 1"},
+			{ID: 2, Name: "Test Event 2"},
 		},
-		Total: 2,
-		Page:  req.Page,
+		Total:    2,
+		Page:     req.Page,
 		PageSize: req.PageSize,
 	}, nil
 }
@@ -68,8 +68,8 @@ func (m *MockSpikeService) GetUserSpikeOrders(ctx context.Context, userID int64,
 		Orders: []*domain.SpikeOrder{
 			{ID: 1, UserID: userID, Status: domain.SpikeOrderStatusPending},
 		},
-		Total: 1,
-		Page:  req.Page,
+		Total:    1,
+		Page:     req.Page,
 		PageSize: req.PageSize,
 	}, nil
 }
@@ -80,7 +80,7 @@ func (m *MockSpikeService) GetSpikeOrderDetail(ctx context.Context, orderID, use
 	}
 	return &domain.SpikeOrderWithDetails{
 		SpikeOrder: &domain.SpikeOrder{ID: orderID, UserID: userID},
-		SpikeEvent: &domain.SpikeEvent{ID: 1, Title: "Test Event"},
+		SpikeEvent: &domain.SpikeEvent{ID: 1, Name: "Test Event"},
 		User:       &domain.User{ID: userID, Username: "testuser"},
 	}, nil
 }
@@ -124,13 +124,13 @@ func setupTestRouter() *gin.Engine {
 func TestSpikeHandler_HealthCheck(t *testing.T) {
 	mockService := &MockSpikeService{}
 	handler := NewSpikeHandler(mockService, zap.NewNop())
-	
+
 	router := setupTestRouter()
 	router.GET("/health", handler.HealthCheck)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
-	
+
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -156,19 +156,19 @@ func TestSpikeHandler_HealthCheck(t *testing.T) {
 
 func TestSpikeHandler_ParticipateSpike(t *testing.T) {
 	tests := []struct {
-		name           string
-		userID         int64
-		requestBody    interface{}
-		mockFunc       func(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error)
-		wantStatus     int
-		wantSuccess    bool
+		name        string
+		userID      int64
+		requestBody interface{}
+		mockFunc    func(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error)
+		wantStatus  int
+		wantSuccess bool
 	}{
 		{
 			name:   "successful participation",
 			userID: 123,
 			requestBody: map[string]interface{}{
-				"spike_event_id":   1,
-				"quantity":         1,
+				"spike_event_id":  1,
+				"quantity":        1,
 				"idempotency_key": "test_key_1",
 			},
 			mockFunc: func(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error) {
@@ -184,8 +184,8 @@ func TestSpikeHandler_ParticipateSpike(t *testing.T) {
 			name:   "sold out",
 			userID: 123,
 			requestBody: map[string]interface{}{
-				"spike_event_id":   1,
-				"quantity":         1,
+				"spike_event_id":  1,
+				"quantity":        1,
 				"idempotency_key": "test_key_2",
 			},
 			mockFunc: func(ctx context.Context, req *domain.SpikeParticipationRequest, userID int64) (*domain.SpikeParticipationResponse, error) {
@@ -206,11 +206,11 @@ func TestSpikeHandler_ParticipateSpike(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "unauthorized user",
-			userID:      0,
+			name:   "unauthorized user",
+			userID: 0,
 			requestBody: map[string]interface{}{
-				"spike_event_id":   1,
-				"quantity":         1,
+				"spike_event_id":  1,
+				"quantity":        1,
 				"idempotency_key": "test_key_3",
 			},
 			wantStatus: http.StatusUnauthorized,
@@ -223,7 +223,7 @@ func TestSpikeHandler_ParticipateSpike(t *testing.T) {
 				participateFunc: tt.mockFunc,
 			}
 			handler := NewSpikeHandler(mockService, zap.NewNop())
-			
+
 			router := setupTestRouter()
 			router.POST("/participate", func(c *gin.Context) {
 				// 模拟用户认证中间件
@@ -237,7 +237,7 @@ func TestSpikeHandler_ParticipateSpike(t *testing.T) {
 			req := httptest.NewRequest("POST", "/participate", bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			
+
 			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
@@ -272,7 +272,7 @@ func TestSpikeHandler_GetSpikeEventDetail(t *testing.T) {
 			eventID: "1",
 			mockFunc: func(ctx context.Context, eventID int64) (*domain.SpikeEventWithProduct, error) {
 				return &domain.SpikeEventWithProduct{
-					SpikeEvent: &domain.SpikeEvent{ID: eventID, Title: "Test Event"},
+					SpikeEvent: &domain.SpikeEvent{ID: eventID, Name: "Test Event"},
 					Product:    &domain.Product{ID: 1, Name: "Test Product"},
 				}, nil
 			},
@@ -299,13 +299,13 @@ func TestSpikeHandler_GetSpikeEventDetail(t *testing.T) {
 				getEventDetailFunc: tt.mockFunc,
 			}
 			handler := NewSpikeHandler(mockService, zap.NewNop())
-			
+
 			router := setupTestRouter()
 			router.GET("/events/:id", handler.GetSpikeEventDetail)
 
 			req := httptest.NewRequest("GET", "/events/"+tt.eventID, nil)
 			w := httptest.NewRecorder()
-			
+
 			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
@@ -347,8 +347,8 @@ func TestSpikeHandler_GetActiveEvents(t *testing.T) {
 			mockFunc: func(ctx context.Context, req *domain.SpikeEventListRequest) (*domain.SpikeEventListResponse, error) {
 				return &domain.SpikeEventListResponse{
 					Events: []*domain.SpikeEvent{
-						{ID: 1, Title: "Event 1"},
-						{ID: 2, Title: "Event 2"},
+						{ID: 1, Name: "Event 1"},
+						{ID: 2, Name: "Event 2"},
 					},
 					Total:    2,
 					Page:     req.Page,
@@ -403,13 +403,13 @@ func TestSpikeHandler_GetActiveEvents(t *testing.T) {
 				getActiveEventsFunc: tt.mockFunc,
 			}
 			handler := NewSpikeHandler(mockService, zap.NewNop())
-			
+
 			router := setupTestRouter()
 			router.GET("/events", handler.GetActiveEvents)
 
 			req := httptest.NewRequest("GET", "/events"+tt.query, nil)
 			w := httptest.NewRecorder()
-			
+
 			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
@@ -488,7 +488,7 @@ func TestSpikeHandler_GetUserSpikeOrders(t *testing.T) {
 				getUserOrdersFunc: tt.mockFunc,
 			}
 			handler := NewSpikeHandler(mockService, zap.NewNop())
-			
+
 			router := setupTestRouter()
 			router.GET("/orders", func(c *gin.Context) {
 				// 模拟用户认证中间件
@@ -500,7 +500,7 @@ func TestSpikeHandler_GetUserSpikeOrders(t *testing.T) {
 
 			req := httptest.NewRequest("GET", "/orders"+tt.query, nil)
 			w := httptest.NewRecorder()
-			
+
 			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
@@ -556,9 +556,9 @@ func TestSpikeHandler_CancelSpikeOrder(t *testing.T) {
 			wantStatus: http.StatusInternalServerError,
 		},
 		{
-			name:        "unauthorized user",
-			userID:      0,
-			orderID:     "1",
+			name:    "unauthorized user",
+			userID:  0,
+			orderID: "1",
 			requestBody: map[string]interface{}{
 				"reason": "test",
 			},
@@ -572,7 +572,7 @@ func TestSpikeHandler_CancelSpikeOrder(t *testing.T) {
 				cancelOrderFunc: tt.mockFunc,
 			}
 			handler := NewSpikeHandler(mockService, zap.NewNop())
-			
+
 			router := setupTestRouter()
 			router.POST("/orders/:id/cancel", func(c *gin.Context) {
 				// 模拟用户认证中间件
@@ -586,7 +586,7 @@ func TestSpikeHandler_CancelSpikeOrder(t *testing.T) {
 			req := httptest.NewRequest("POST", "/orders/"+tt.orderID+"/cancel", bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			
+
 			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
@@ -642,7 +642,7 @@ func TestSpikeHandler_WarmupStock(t *testing.T) {
 				warmupStockFunc: tt.mockFunc,
 			}
 			handler := NewSpikeHandler(mockService, zap.NewNop())
-			
+
 			router := setupTestRouter()
 			router.POST("/admin/events/:id/warmup", func(c *gin.Context) {
 				// 模拟管理员权限中间件
@@ -656,7 +656,7 @@ func TestSpikeHandler_WarmupStock(t *testing.T) {
 
 			req := httptest.NewRequest("POST", "/admin/events/"+tt.eventID+"/warmup", nil)
 			w := httptest.NewRecorder()
-			
+
 			router.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
@@ -669,7 +669,7 @@ func TestSpikeHandler_WarmupStock(t *testing.T) {
 // 测试辅助方法
 func TestSpikeHandler_HelperMethods(t *testing.T) {
 	handler := NewSpikeHandler(nil, zap.NewNop())
-	
+
 	// 测试 getCurrentUserID
 	router := setupTestRouter()
 	router.GET("/test-user-id", func(c *gin.Context) {

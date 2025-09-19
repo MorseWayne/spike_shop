@@ -2,7 +2,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
+)
+
+// 常用错误
+var (
+	ErrSpikeEventNotFound = errors.New("秒杀活动不存在")
 )
 
 // SpikeEventStatus 定义秒杀活动状态类型
