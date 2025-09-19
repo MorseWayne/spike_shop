@@ -22,6 +22,7 @@ import (
 type DB struct {
 	*sql.DB
 	logger *zap.Logger
+	dsn    string
 }
 
 // New 创建数据库连接
@@ -55,7 +56,7 @@ func New(cfg *config.Config, logger *zap.Logger) (*DB, error) {
 		zap.String("database", cfg.Database.DBName),
 	)
 
-	return &DB{DB: sqlDB, logger: logger}, nil
+	return &DB{DB: sqlDB, logger: logger, dsn: dsn}, nil
 }
 
 // RunMigrations 使用 go-migrate 执行数据库迁移
@@ -73,8 +74,15 @@ func New(cfg *config.Config, logger *zap.Logger) (*DB, error) {
 // 4. 自动处理迁移版本冲突和错误恢复
 // 5. 支持脏迁移检测和修复
 func (db *DB) RunMigrations(migrationsDir string) error {
-	// 创建 MySQL 数据库驱动实例
-	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
+	// 迁移使用独立连接，避免错误时影响主连接
+	migrateSQLDB, err := sql.Open("mysql", db.dsn)
+	if err != nil {
+		return fmt.Errorf("open database for migration: %w", err)
+	}
+	defer migrateSQLDB.Close()
+
+	// 创建 MySQL 数据库驱动实例（基于独立连接）
+	driver, err := mysql.WithInstance(migrateSQLDB, &mysql.Config{})
 	if err != nil {
 		return fmt.Errorf("create mysql driver: %w", err)
 	}
@@ -129,8 +137,14 @@ func (db *DB) RunMigrations(migrationsDir string) error {
 // MigrateDown 执行向下迁移（回滚）
 // 注意：这个方法应该谨慎使用，特别是在生产环境中
 func (db *DB) MigrateDown(migrationsDir string, steps int) error {
-	// 创建 MySQL 数据库驱动实例
-	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
+	migrateSQLDB, err := sql.Open("mysql", db.dsn)
+	if err != nil {
+		return fmt.Errorf("open database for migration: %w", err)
+	}
+	defer migrateSQLDB.Close()
+
+	// 创建 MySQL 数据库驱动实例（基于独立连接）
+	driver, err := mysql.WithInstance(migrateSQLDB, &mysql.Config{})
 	if err != nil {
 		return fmt.Errorf("create mysql driver: %w", err)
 	}
@@ -182,8 +196,14 @@ func (db *DB) MigrateDown(migrationsDir string, steps int) error {
 
 // MigrateToVersion 迁移到指定版本
 func (db *DB) MigrateToVersion(migrationsDir string, version uint) error {
-	// 创建 MySQL 数据库驱动实例
-	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
+	migrateSQLDB, err := sql.Open("mysql", db.dsn)
+	if err != nil {
+		return fmt.Errorf("open database for migration: %w", err)
+	}
+	defer migrateSQLDB.Close()
+
+	// 创建 MySQL 数据库驱动实例（基于独立连接）
+	driver, err := mysql.WithInstance(migrateSQLDB, &mysql.Config{})
 	if err != nil {
 		return fmt.Errorf("create mysql driver: %w", err)
 	}
@@ -234,8 +254,14 @@ func (db *DB) MigrateToVersion(migrationsDir string, version uint) error {
 // ForceMigrationVersion 强制设置迁移版本状态
 // 注意：这个方法应该非常谨慎使用，只在修复脏状态时使用
 func (db *DB) ForceMigrationVersion(migrationsDir string, version uint) error {
-	// 创建 MySQL 数据库驱动实例
-	driver, err := mysql.WithInstance(db.DB, &mysql.Config{})
+	migrateSQLDB, err := sql.Open("mysql", db.dsn)
+	if err != nil {
+		return fmt.Errorf("open database for migration: %w", err)
+	}
+	defer migrateSQLDB.Close()
+
+	// 创建 MySQL 数据库驱动实例（基于独立连接）
+	driver, err := mysql.WithInstance(migrateSQLDB, &mysql.Config{})
 	if err != nil {
 		return fmt.Errorf("create mysql driver: %w", err)
 	}
